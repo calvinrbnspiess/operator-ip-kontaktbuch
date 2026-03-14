@@ -1,0 +1,121 @@
+WITH r AS (
+    SELECT
+        r."personId",
+        MAX(CASE WHEN r."reachabilitytypeId" = 1 THEN r."content" END) AS tel_privat,
+        MAX(CASE WHEN r."reachabilitytypeId" = 2 THEN r."content" END) AS mobiltelefon,
+        MAX(CASE WHEN r."reachabilitytypeId" = 3 THEN r."content" END) AS weiteres_telefon,
+        MAX(CASE WHEN r."reachabilitytypeId" = 4 THEN r."content" END) AS telefon_firma,
+        MAX(CASE WHEN r."reachabilitytypeId" = 12 THEN r."content" END) AS tel_geschaeftlich
+    FROM public.reachabilities r
+    GROUP BY r."personId"
+)
+
+SELECT
+    ''                         AS "Anrede",
+    p."firstName"              AS "Vorname",
+    ''                         AS "Weitere Vornamen",
+    p."lastName"               AS "Nachname",
+    ''                         AS "Suffix",
+    ''                         AS "Firma",
+    ''                         AS "Abteilung",
+    ''                         AS "Position",
+    ''                         AS "Straße geschäftlich",
+    ''                         AS "Straße geschäftlich 2",
+    ''                         AS "Straße geschäftlich 3",
+    ''                         AS "Ort geschäftlich",
+    ''                         AS "Region geschäftlich",
+    ''                         AS "Postleitzahl geschäftlich",
+    ''                         AS "Land/Region geschäftlich",
+    ''                         AS "Straße privat",
+    ''                         AS "Straße privat 2",
+    ''                         AS "Straße privat 3",
+    ''                         AS "Ort privat",
+    ''                         AS "Bundesland/Kanton privat",
+    ''                         AS "Postleitzahl privat",
+    ''                         AS "Land/Region privat",
+    ''                         AS "Weitere Straße",
+    ''                         AS "Weitere Straße 2",
+    ''                         AS "Weitere Straße 3",
+    ''                         AS "Weiterer Ort",
+    ''                         AS "Weiteres/r Bundesland/Kanton",
+    ''                         AS "Weitere Postleitzahl",
+    ''                         AS "Weiteres/e Land/Region",
+    ''                         AS "Telefon Assistent",
+    ''                         AS "Fax geschäftlich",
+
+    COALESCE(r.tel_geschaeftlich, '') AS "Telefon geschäftlich",
+
+    ''                         AS "Telefon geschäftlich 2",
+    ''                         AS "Rückmeldung",
+    ''                         AS "Autotelefon",
+
+    COALESCE(r.telefon_firma, '') AS "Telefon Firma",
+
+    ''                         AS "Fax privat",
+
+    COALESCE(r.tel_privat, '') AS "Telefon (privat)",
+    ''                         AS "Telefon (privat 2)",
+    ''                         AS "ISDN",
+
+    COALESCE(r.mobiltelefon, '') AS "Mobiltelefon",
+
+    ''                         AS "Weiteres Fax",
+
+    COALESCE(r.weiteres_telefon, '') AS "Weiteres Telefon",
+
+    ''                         AS "Pager",
+    ''                         AS "Haupttelefon",
+    ''                         AS "Mobiltelefon 2",
+    ''                         AS "Telefon für Hörbehinderte",
+    ''                         AS "Telex",
+    ''                         AS "Abrechnungsinformation",
+    ''                         AS "Assistent(in)",
+    ''                         AS "Benutzer 1",
+    ''                         AS "Benutzer 2",
+    ''                         AS "Benutzer 3",
+    ''                         AS "Benutzer 4",
+    ''                         AS "Beruf",
+    ''                         AS "Büro",
+    ''                         AS "E-Mail-Adresse",
+    ''                         AS "E-Mail-Typ",
+    ''                         AS "E-Mail: Angezeigter Name",
+    ''                         AS "E-Mail 2: Adresse",
+    ''                         AS "E-Mail 2: Typ",
+    ''                         AS "E-Mail 2: Angezeigter Name",
+    ''                         AS "E-Mail 3: Adresse",
+    ''                         AS "E-Mail 3: Typ",
+    ''                         AS "E-Mail 3: Angezeigter Name",
+    ''                         AS "Empfohlen von",
+    ''                         AS "Geburtstag",
+    ''                         AS "Geschlecht",
+    ''                         AS "Hobby",
+    ''                         AS "Initialen",
+    ''                         AS "Internet Frei/Gebucht",
+    ''                         AS "Jahrestag",
+    ''                         AS "Kategorien",
+    ''                         AS "Kinder",
+    ''                         AS "Konto",
+    ''                         AS "Name des/r Vorgesetzten",
+    ''                         AS "Notizen",
+    ''                         AS "Organisationsnr.",
+    ''                         AS "Ort",
+    ''                         AS "Partner",
+    ''                         AS "Postfach geschäftlich",
+    ''                         AS "Postfach privat",
+    ''                         AS "Priorität",
+    ''                         AS "Privat",
+    ''                         AS "Reisekilometer",
+    ''                         AS "Sozialversicherungsnr.",
+    ''                         AS "Sprache",
+    ''                         AS "Stichwörter",
+    ''                         AS "Vertraulichkeit",
+    ''                         AS "Verzeichnisserver",
+    ''                         AS "Webseite",
+    ''                         AS "Weiteres Postfach",
+    ''                         AS "Spalte1",
+    ''                         AS "Spalte2"
+
+FROM public.people p
+LEFT JOIN r ON r."personId" = p."id"
+WHERE p."exportFlag" IS TRUE
+ORDER BY p."id" ASC;
