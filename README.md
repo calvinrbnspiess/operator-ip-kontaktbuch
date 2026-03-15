@@ -90,3 +90,4 @@ Schritt 1:
 - Rufe alle Ansprechpartner der Firmen ab
 - Rufe alle Personen ab
 
+Testing: docker compose -f docker-compose.yaml -f ldap-sync/ldap-usergroup-sync/docker-compose.yaml run --rm ldap-sync bash test.sh

@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ── ldap-usergroup-sync ──────────────────────────────────────────────────────
 # Extends the root docker-compose.yaml.  Run from the repo root with:
 #
@@ -21,10 +19,7 @@ services:
     container_name: ldap-usergroup-sync
     restart: unless-stopped
     volumes:
-      # Live-mount config so changes take effect without rebuilding the image
-      - ./ldap-sync/ldap-usergroup-sync/config.yaml:/opt/ldap-usergroup-sync/config.yaml:ro
-      # Persist logs on the host
-      - ./ldap-sync/ldap-usergroup-sync/logs:/opt/ldap-usergroup-sync/logs
+      - ./ldap-sync/ldap-usergroup-sync/:/opt/ldap-usergroup-sync
     networks:
       - operator-ip-kontaktbuch-network
     # The container only needs to reach Postgres (same Docker network) and
@@ -34,4 +29,4 @@ services:
 
 networks:
   operator-ip-kontaktbuch-network:
-    external: true
+    driver: bridge

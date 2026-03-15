@@ -362,18 +362,20 @@ _ensure_group() {
 
   log_change "Group '${group_cn}': creating in LDAP"
 
-  local desc_line=""
-  [[ -n "${description}" ]] && desc_line="description: ${description}"
-
-  _ldap_apply add "$(cat <<LDIF
-dn: ${group_dn}
+  # Build the LDIF line by line so we never emit a blank line when description
+  # is absent.  In LDIF format a blank line is a record separator, which would
+  # split this into two broken records and cause ldapadd to fail.
+  local ldif
+  ldif="dn: ${group_dn}
 objectClass: top
 objectClass: groupOfNames
-cn: ${group_cn}
-${desc_line}
-member: ${first_member}
-LDIF
-)"
+cn: ${group_cn}"
+  [[ -n "${description}" ]] && ldif+="
+description: ${description}"
+  ldif+="
+member: ${first_member}"
+
+  _ldap_apply add "${ldif}"
 }
 
 sync_group() {
