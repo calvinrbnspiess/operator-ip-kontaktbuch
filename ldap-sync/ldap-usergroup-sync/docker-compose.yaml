@@ -1,15 +1,13 @@
 # ── ldap-usergroup-sync ──────────────────────────────────────────────────────
 # Extends the root docker-compose.yaml.  Run from the repo root with:
 #
-#   docker compose -f docker-compose.yaml -f ldap-sync/ldap-usergroup-sync/docker-compose.yml up -d ldap-sync
+#   docker compose -f docker-compose.yaml -f ldap-sync/ldap-usergroup-sync/docker-compose.yaml up -d ldap-sync
 #
 # Or run a one-shot sync:
-#   docker compose -f docker-compose.yaml -f ldap-sync/ldap-usergroup-sync/docker-compose.yml \
-#     run --rm ldap-sync ./sync.sh
+#   docker compose -f docker-compose.yaml -f ldap-sync/ldap-usergroup-sync/docker-compose.yaml run --rm ldap-sync ./sync.sh
 #
 # Seed test data:
-#   docker compose -f docker-compose.yaml -f ldap-sync/ldap-usergroup-sync/docker-compose.yml \
-#     run --rm ldap-sync ./seed.sh
+#   docker compose -f docker-compose.yaml -f ldap-sync/ldap-usergroup-sync/docker-compose.yaml run --rm ldap-sync ./seed.sh
 
 services:
   ldap-sync:

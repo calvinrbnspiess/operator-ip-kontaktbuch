@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 — 15-03-2026
 # ═══════════════════════════════════════════════════════════════════════════
 # seed.sh — Populate PostgreSQL and LDAP with test data
 #

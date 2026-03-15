@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 — 15-03-2026
 # ═══════════════════════════════════════════════════════════════════════════
 # test.sh — Integration tests for sync.sh
 #
@@ -233,6 +234,20 @@ assert_ldap_group_lacks_member() {
   fi
 }
 
+assert_ldap_group_has_business_category() {
+  local group_cn="$1"
+  local expected_type="$2"
+  local count
+  count=$(ldapsearch -x -LLL \
+    -H "ldap://${LDAP_HOST}:${LDAP_PORT}" \
+    -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" \
+    -b "${LDAP_GROUPS_OU}" "(cn=${group_cn})" businessCategory 2>/dev/null \
+    | grep -c "^businessCategory: ${expected_type}" || true)
+  if [[ "${count}" -eq 0 ]]; then
+    _assertion_failures+=("Group '${group_cn}' should have businessCategory='${expected_type}' but does not")
+  fi
+}
+
 # ── Test infrastructure ───────────────────────────────────────────────────
 
 # Write a test config.yaml that re-uses connection settings from the base
@@ -301,7 +316,7 @@ report_result() {
 # Remove test LDAP users (called at the start of Phase 1 tests and at teardown).
 delete_test_ldap_users() {
   for p_num in ${P_ALICE} ${P_BOB} ${P_CAROL} ${P_DAVE} ${P_EVE} ${P_FRANK}; do
-    ldap_delete "uid=p-${p_num},${LDAP_USERS_OU}"
+    ldap_delete "uid=P-${p_num},${LDAP_USERS_OU}"
   done
 }
 
@@ -397,8 +412,8 @@ test_T01_new_user_is_created_in_ldap() {
   run_sync
 
   # Assert: Alice should now exist and have posixAccount
-  assert_ldap_user_exists    "p-${P_ALICE}"
-  assert_ldap_user_has_posix "p-${P_ALICE}"
+  assert_ldap_user_exists    "P-${P_ALICE}"
+  assert_ldap_user_has_posix "P-${P_ALICE}"
 
   report_result "T01"
 }
@@ -408,10 +423,10 @@ test_T02_existing_user_without_posix_gets_posix_added() {
   _assertion_failures=()
 
   # Arrange: put Bob in LDAP as a plain inetOrgPerson (no POSIX attributes)
-  ldap_delete "uid=p-${P_BOB},${LDAP_USERS_OU}"
-  ldap_add_entry "dn: uid=p-${P_BOB},${LDAP_USERS_OU}
+  ldap_delete "uid=P-${P_BOB},${LDAP_USERS_OU}"
+  ldap_add_entry "dn: uid=P-${P_BOB},${LDAP_USERS_OU}
 objectClass: inetOrgPerson
-uid: p-${P_BOB}
+uid: P-${P_BOB}
 cn: Bob Tester
 sn: Tester
 givenName: Bob
@@ -423,7 +438,7 @@ userPassword: OldPassword1!"
   run_sync
 
   # Assert: posixAccount should have been added to the existing entry
-  assert_ldap_user_has_posix "p-${P_BOB}"
+  assert_ldap_user_has_posix "P-${P_BOB}"
 
   report_result "T02"
 }
@@ -433,14 +448,14 @@ test_T03_inactive_user_is_not_created() {
   _assertion_failures=()
 
   # Arrange: Dave is inactive in the DB; ensure he is absent from LDAP
-  ldap_delete "uid=p-${P_DAVE},${LDAP_USERS_OU}"
+  ldap_delete "uid=P-${P_DAVE},${LDAP_USERS_OU}"
   write_test_config
 
   # Act
   run_sync
 
   # Assert: Dave must remain absent
-  assert_ldap_user_missing "p-${P_DAVE}"
+  assert_ldap_user_missing "P-${P_DAVE}"
 
   report_result "T03"
 }
@@ -450,14 +465,14 @@ test_T04_wrong_persontype_is_not_synced() {
   _assertion_failures=()
 
   # Arrange: Eve has persontypeId=2; the test config only allows type 5.
-  ldap_delete "uid=p-${P_EVE},${LDAP_USERS_OU}"
+  ldap_delete "uid=P-${P_EVE},${LDAP_USERS_OU}"
   write_test_config
 
   # Act
   run_sync
 
   # Assert: Eve must remain absent
-  assert_ldap_user_missing "p-${P_EVE}"
+  assert_ldap_user_missing "P-${P_EVE}"
 
   report_result "T04"
 }
@@ -486,10 +501,11 @@ test_T05_new_group_is_created_with_correct_members() {
   # Act
   run_sync
 
-  # Assert: group created with both Alice and Bob
-  assert_ldap_group_exists      "${TEST_LDAP_GROUP_DEPT}"
-  assert_ldap_group_has_member  "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member  "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_BOB},${LDAP_USERS_OU}"
+  # Assert: group created with both Alice and Bob, tagged as department
+  assert_ldap_group_exists                   "${TEST_LDAP_GROUP_DEPT}"
+  assert_ldap_group_has_member               "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member               "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_has_business_category    "${TEST_LDAP_GROUP_DEPT}" "department"
 
   report_result "T05"
 }
@@ -513,7 +529,7 @@ objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
 member: uid=old-user,${LDAP_USERS_OU}
-member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -522,7 +538,7 @@ member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
 
   # Assert: old-user removed, Alice stays
   assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=old-user,${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T06"
 }
@@ -546,7 +562,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -554,8 +570,8 @@ member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: both Alice and Bob are now members
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
 
   report_result "T07"
 }
@@ -582,8 +598,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=p-${P_CAROL},${LDAP_USERS_OU}
-member: uid=p-${P_BOB},${LDAP_USERS_OU}"
+member: uid=P-${P_CAROL},${LDAP_USERS_OU}
+member: uid=P-${P_BOB},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -591,8 +607,8 @@ member: uid=p-${P_BOB},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Carol out (expired), Bob stays
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_CAROL},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
 
   report_result "T08"
 }
@@ -620,8 +636,8 @@ test_T09_future_memberFrom_is_not_yet_active() {
   run_sync
 
   # Assert: Alice is in the group, Frank is not
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_FRANK},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_FRANK},${LDAP_USERS_OU}"
 
   report_result "T09"
 }
@@ -648,8 +664,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: uid=p-${P_CAROL},${LDAP_USERS_OU}
-member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
+member: uid=P-${P_CAROL},${LDAP_USERS_OU}
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_FUNC}:function:${TEST_FUNC_NAME}:Test func group"
 
@@ -657,8 +673,8 @@ member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Carol removed (expired cert), Alice stays
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "uid=p-${P_CAROL},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T10"
 }
@@ -685,9 +701,10 @@ test_T11_future_validFrom_for_function_excluded() {
   # Act
   run_sync
 
-  # Assert: Alice added, Frank not
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "uid=p-${P_FRANK},${LDAP_USERS_OU}"
+  # Assert: Alice added, Frank not; group tagged as function
+  assert_ldap_group_has_member             "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member           "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_FRANK},${LDAP_USERS_OU}"
+  assert_ldap_group_has_business_category  "${TEST_LDAP_GROUP_FUNC}" "function"
 
   report_result "T11"
 }
@@ -721,8 +738,8 @@ test_T12_person_appears_in_multiple_groups() {
   run_sync
 
   # Assert: Alice is a member of both LDAP groups
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_FUNC}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T12"
 }
@@ -748,8 +765,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=p-${P_ALICE},${LDAP_USERS_OU}
-member: uid=p-${P_BOB},${LDAP_USERS_OU}"
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}
+member: uid=P-${P_BOB},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -757,9 +774,9 @@ member: uid=p-${P_BOB},${LDAP_USERS_OU}"
   run_sync
 
   # Assert
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T13"
 }
@@ -807,9 +824,9 @@ test_T15_sync_is_idempotent() {
   run_sync
 
   # Assert: Alice is in the group; Bob and Carol are NOT (no phantom additions)
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T15"
 }
@@ -837,7 +854,7 @@ test_T17_group_without_description_is_created_correctly() {
 
   # Assert: group was created despite empty description
   assert_ldap_group_exists     "${TEST_LDAP_GROUP_DEPT}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T17"
 }
@@ -871,13 +888,13 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config \
     "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group" \
@@ -887,10 +904,123 @@ member: uid=p-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice stays in dept group, is removed from func group
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "uid=p-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T16"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TESTS — Password behaviour
+# ═══════════════════════════════════════════════════════════════════════════
+
+test_T18_new_user_has_ssha_password_when_enabled() {
+  echo "T18: set_default_password=true → new user's userPassword is stored as {SSHA}"
+  _assertion_failures=()
+
+  # Arrange: Alice is not in LDAP; the test config has set_default_password=true
+  delete_test_ldap_users
+  write_test_config   # no group mappings needed
+
+  # Act
+  run_sync
+
+  # Assert: Alice exists and her userPassword attribute starts with {SSHA}
+  assert_ldap_user_exists "P-${P_ALICE}"
+
+  local pw_line
+  pw_line=$(ldapsearch -x -LLL \
+    -H "ldap://${LDAP_HOST}:${LDAP_PORT}" \
+    -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" \
+    -b "${LDAP_USERS_OU}" "(uid=P-${P_ALICE})" userPassword 2>/dev/null \
+    | grep "^userPassword" | head -1)
+
+  if [[ -z "${pw_line}" ]]; then
+    _assertion_failures+=("User 'P-${P_ALICE}' should have a userPassword attribute but does not")
+  elif echo "${pw_line}" | grep -q "^userPassword:: "; then
+    # ldapsearch uses '::' and base64-encodes the value when it contains binary
+    # data (which SSHA hashes always do).  Decode it and check the prefix.
+    local decoded
+    decoded=$(echo "${pw_line}" | sed 's/^userPassword:: //' | base64 -d 2>/dev/null || true)
+    if ! echo "${decoded}" | grep -q "^{SSHA}"; then
+      _assertion_failures+=("User 'P-${P_ALICE}' decoded userPassword should start with {SSHA} but got: ${decoded}")
+    fi
+  elif ! echo "${pw_line}" | grep -q "{SSHA}"; then
+    _assertion_failures+=("User 'P-${P_ALICE}' userPassword should be an SSHA hash but got: ${pw_line}")
+  fi
+
+  report_result "T18"
+}
+
+test_T19_new_user_has_no_password_when_disabled() {
+  echo "T19: set_default_password=false → new user has no userPassword attribute (locked account)"
+  _assertion_failures=()
+
+  # Arrange: Alice is not in LDAP; override set_default_password to false
+  # by writing a test config with the property disabled.
+  delete_test_ldap_users
+
+  python3 - "${CONFIG_FILE}" > "${TEST_CONFIG}" <<'PYEOF'
+import sys, yaml
+with open(sys.argv[1]) as fh:
+    config = yaml.safe_load(fh)
+config['sync']['person_type_ids'] = [99]
+config['sync']['set_default_password'] = False
+config['group_mappings'] = []
+print(yaml.dump(config, allow_unicode=True, default_flow_style=False))
+PYEOF
+
+  # Act
+  run_sync
+
+  # Assert: Alice exists but has NO userPassword attribute
+  assert_ldap_user_exists "P-${P_ALICE}"
+
+  local pw_value
+  pw_value=$(ldapsearch -x -LLL \
+    -H "ldap://${LDAP_HOST}:${LDAP_PORT}" \
+    -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" \
+    -b "${LDAP_USERS_OU}" "(uid=P-${P_ALICE})" userPassword 2>/dev/null \
+    | grep "^userPassword:" | head -1 || true)
+
+  if [[ -n "${pw_value}" ]]; then
+    _assertion_failures+=("User 'P-${P_ALICE}' should have NO userPassword but got: ${pw_value}")
+  fi
+
+  report_result "T19"
+}
+
+test_T20_existing_group_without_business_category_gets_it_added() {
+  echo "T20: Group already in LDAP without businessCategory → sync adds the attribute"
+  _assertion_failures=()
+
+  # Arrange: pre-create the function group without businessCategory (simulates
+  # a group that existed before this feature was introduced).
+  delete_test_db_memberships
+  delete_test_ldap_groups
+  db_exec "
+    INSERT INTO public.personfunctions
+      (\"personId\", \"funcId\", \"validFrom\", \"validUntil\")
+    VALUES
+      (${DB_ID_ALICE}, ${TEST_FUNC_ID}, '2021-01-01', NULL);
+  "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_FUNC}
+description: Test func group (legacy, no businessCategory)
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+
+  write_test_config "${TEST_LDAP_GROUP_FUNC}:function:${TEST_FUNC_NAME}:Test func group"
+
+  # Act
+  run_sync
+
+  # Assert: businessCategory was added, membership unchanged
+  assert_ldap_group_has_business_category  "${TEST_LDAP_GROUP_FUNC}" "function"
+  assert_ldap_group_has_member             "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+
+  report_result "T20"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -928,6 +1058,15 @@ main() {
   test_T15_sync_is_idempotent
   test_T16_user_with_multiple_roles_removed_from_one_group
   test_T17_group_without_description_is_created_correctly
+
+  echo ""
+  echo "── Password behaviour ───────────────────────────"
+  test_T18_new_user_has_ssha_password_when_enabled
+  test_T19_new_user_has_no_password_when_disabled
+
+  echo ""
+  echo "── Group metadata ───────────────────────────────"
+  test_T20_existing_group_without_business_category_gets_it_added
 
   global_teardown
 

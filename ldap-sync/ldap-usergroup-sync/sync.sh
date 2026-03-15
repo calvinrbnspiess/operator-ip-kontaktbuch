@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 — 15-03-2026
 # ═══════════════════════════════════════════════════════════════════════════
 # ldap-usergroup-sync
 #
@@ -104,9 +105,10 @@ pairs = [
     ("DB_PASS",           d['password']),
     ("SYNC_GID_NUMBER",   s['gid_number']),
     ("SYNC_HOME_BASE",    s['home_base']),
-    ("SYNC_CREATE_USERS", 'true' if s.get('create_users', True) else 'false'),
-    ("SYNC_DEFAULT_PW",   s.get('default_password', 'ChangeMe123!')),
-    ("SYNC_TYPE_IDS",     ','.join(str(i) for i in s.get('person_type_ids', []))),
+    ("SYNC_CREATE_USERS",       'true' if s.get('create_users', True) else 'false'),
+    ("SYNC_SET_DEFAULT_PW",    'true' if s.get('set_default_password', True) else 'false'),
+    ("SYNC_DEFAULT_PW",        s.get('default_password', 'ChangeMe123!')),
+    ("SYNC_TYPE_IDS",          ','.join(str(i) for i in s.get('person_type_ids', []))),
 ]
 
 for name, val in pairs:
@@ -182,6 +184,20 @@ db_query() {
     -c "$1"
 }
 
+# ─── Password helpers ────────────────────────────────────────────────────────
+
+# Return a {SSHA} hashed password suitable for use as an LDAP userPassword.
+# SSHA = SHA-1(password + salt) + salt, base64-encoded, prefixed with {SSHA}.
+# A fresh 4-byte random salt is used on every call.
+ssha_hash() {
+  python3 -c "
+import hashlib, os, base64, sys
+pw   = sys.argv[1].encode('utf-8')
+salt = os.urandom(4)
+print('{SSHA}' + base64.b64encode(hashlib.sha1(pw + salt).digest() + salt).decode())
+" "$1"
+}
+
 # ─── Phase 1: User sync ─────────────────────────────────────────────────────
 
 sync_users() {
@@ -213,7 +229,7 @@ sync_users() {
   while IFS=$'\t' read -r person_number first_name last_name; do
     [[ -z "${person_number}" ]] && continue
 
-    local uid="p-${person_number}"
+    local uid="P-${person_number}"
     local dn="uid=${uid},${LDAP_USERS_OU}"
     local home_dir="${SYNC_HOME_BASE}/p-${person_number}"
     local cn="${first_name} ${last_name}"
@@ -264,8 +280,12 @@ LDIF
       fi
 
       log_change "User ${uid}: creating (${first_name} ${last_name}, uidNumber=${person_number})"
-      _ldap_apply add "$(cat <<LDIF
-dn: ${dn}
+
+      # Build the LDIF as a string so we can conditionally include userPassword.
+      # Omitting userPassword entirely creates the account in a locked state —
+      # the user cannot authenticate until an admin sets a password.
+      local new_user_ldif
+      new_user_ldif="dn: ${dn}
 objectClass: inetOrgPerson
 objectClass: posixAccount
 objectClass: shadowAccount
@@ -276,10 +296,16 @@ givenName: ${first_name}
 uidNumber: ${person_number}
 gidNumber: ${SYNC_GID_NUMBER}
 homeDirectory: ${home_dir}
-loginShell: /bin/bash
-userPassword: ${SYNC_DEFAULT_PW}
-LDIF
-)"
+loginShell: /bin/bash"
+      if [[ "${SYNC_SET_DEFAULT_PW}" == "true" ]]; then
+        new_user_ldif+="
+userPassword: $(ssha_hash "${SYNC_DEFAULT_PW}")"
+        log_info "User ${uid}: default password will be set as SSHA hash"
+      else
+        log_info "User ${uid}: no default password set (account locked until admin sets one)"
+      fi
+
+      _ldap_apply add "${new_user_ldif}"
       (( created++ )) || true
     fi
 
@@ -314,7 +340,7 @@ _desired_members() {
   if [[ "${type}" == "department" ]]; then
     query="
       SELECT DISTINCT
-        'uid=p-' || p.\"personNumber\" || ',${LDAP_USERS_OU}'
+        'uid=P-' || p.\"personNumber\" || ',${LDAP_USERS_OU}'
       FROM public.people p
       JOIN public.persondepartments pd ON pd.\"personId\" = p.id
       JOIN public.departments       d  ON d.id = pd.\"departmentId\"
@@ -328,7 +354,7 @@ _desired_members() {
   elif [[ "${type}" == "function" ]]; then
     query="
       SELECT DISTINCT
-        'uid=p-' || p.\"personNumber\" || ',${LDAP_USERS_OU}'
+        'uid=P-' || p.\"personNumber\" || ',${LDAP_USERS_OU}'
       FROM public.people p
       JOIN public.personfunctions pf ON pf.\"personId\" = p.id
       JOIN public.functions        f  ON f.id = pf.\"funcId\"
@@ -352,15 +378,16 @@ _desired_members() {
 # We pass the first desired member so the initial add satisfies the schema.
 _ensure_group() {
   local group_cn="$1"
-  local description="${2:-}"
-  local first_member="$3"
+  local type="$2"          # "department" or "function"
+  local description="${3:-}"
+  local first_member="$4"
   local group_dn="cn=${group_cn},${LDAP_GROUPS_OU}"
 
   if ldap_entry_exists "${group_dn}"; then
     return 0
   fi
 
-  log_change "Group '${group_cn}': creating in LDAP"
+  log_change "Group '${group_cn}': creating in LDAP (businessCategory=${type})"
 
   # Build the LDIF line by line so we never emit a blank line when description
   # is absent.  In LDIF format a blank line is a record separator, which would
@@ -369,7 +396,8 @@ _ensure_group() {
   ldif="dn: ${group_dn}
 objectClass: top
 objectClass: groupOfNames
-cn: ${group_cn}"
+cn: ${group_cn}
+businessCategory: ${type}"
   [[ -n "${description}" ]] && ldif+="
 description: ${description}"
   ldif+="
@@ -401,8 +429,23 @@ sync_group() {
   # Track whether the group was just created (first member was implicit).
   local group_created=false
   if ! ldap_entry_exists "${group_dn}"; then
-    _ensure_group "${group_cn}" "${description}" "${desired[0]}"
+    _ensure_group "${group_cn}" "${type}" "${description}" "${desired[0]}"
     group_created=true
+  else
+    # Ensure businessCategory is present on pre-existing groups.
+    local has_biz_cat
+    has_biz_cat=$(_ldap_search "${LDAP_GROUPS_OU}" "(cn=${group_cn})" businessCategory \
+                  | grep -c "^businessCategory:" || true)
+    if [[ "${has_biz_cat}" -eq 0 ]]; then
+      log_change "Group '${group_cn}': adding businessCategory=${type}"
+      _ldap_apply modify "$(cat <<LDIF
+dn: ${group_dn}
+changetype: modify
+add: businessCategory
+businessCategory: ${type}
+LDIF
+)"
+    fi
   fi
 
   # Collect current members (reflects the just-created state if applicable).

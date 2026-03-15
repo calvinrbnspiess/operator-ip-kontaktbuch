@@ -1,3 +1,4 @@
+# Version 1 — 15-03-2026
 # ─── ldap-usergroup-sync configuration ─────────────────────────────────────
 # Only groups listed under group_mappings will ever be touched by this tool.
 
@@ -32,7 +33,12 @@ sync:
   # Automatically create LDAP users for persons not yet present in LDAP
   create_users: true
 
-  # Plain-text password set when a new user is created.
+  # Whether to set a default password when a new user is created.
+  # Set to false to create accounts in a locked state (no authentication
+  # possible until an admin sets a password explicitly).
+  set_default_password: true
+
+  # The default password stored as an SSHA hash when set_default_password is true.
   # Users should change this on first login.
   default_password: "ChangeMe123!"
 
@@ -68,17 +74,17 @@ group_mappings:
   - ldap_group: "korbfahrer"
     type: function
     source: "Korbfahrer"
-    description: "Zertifizierte Korbfahrer"
+    description: "Korbfahrer"
 
   - ldap_group: "landau-stadt"
     type: department
     source: "Landau-Stadt"
-    description: "Angehörige der Abteilung Landau-Stadt"
+    description: "Angehörige der Einheit Landau-Stadt"
 
   - ldap_group: "landau-dammheim"
     type: department
     source: "Landau-Dammheim"
-    description: "Angehörige der Abteilung Landau-Dammheim"
+    description: "Angehörige der Einheit Landau-Dammheim"
 
   - ldap_group: "it-fachguru"
     type: function
