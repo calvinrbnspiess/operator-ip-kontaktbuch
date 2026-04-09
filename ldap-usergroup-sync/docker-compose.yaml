@@ -1,0 +1,67 @@
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-bookworm
+    container_name: ldap-sync-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - ldap-sync-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      retries: 10
+
+  # ── OpenLDAP ───────────────────────────────────────────────────────────────
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: ldap-sync-openldap
+    environment:
+      LDAP_ORGANISATION: "Demo Feuerwehr"
+      LDAP_DOMAIN: "demo.local"
+      LDAP_ADMIN_PASSWORD: "admin"
+    ports:
+      - "3389:389"
+    volumes:
+      - ldap_data:/var/lib/ldap
+      - ldap_config:/etc/ldap/slapd.d
+    networks:
+      - ldap-sync-net
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -D cn=admin,dc=demo,dc=local -w admin -b dc=demo,dc=local -s base '(objectclass=*)' > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ── Sync tool ──────────────────────────────────────────────────────────────
+  ldap-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ldap-sync-tool
+    volumes:
+      - ./:/opt/ldap-usergroup-sync
+    networks:
+      - ldap-sync-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      openldap:
+        condition: service_healthy
+
+volumes:
+  pg_data:
+  ldap_data:
+  ldap_config:
+
+networks:
+  ldap-sync-net:
+    driver: bridge

@@ -1,0 +1,42 @@
+# Version 2 — 2026-04-09
+#
+# ─── ldap-usergroup-sync configuration ──────────────────────────────────────
+# This file holds connection credentials for LDAP, PostgreSQL, and SMTP.
+# Group mappings live in the file pointed to by group_mappings_file below.
+
+# ─── LDAP Connection ────────────────────────────────────────────────────────
+ldap:
+  host: "openldap"
+  port: 389
+  bind_dn: "cn=admin,dc=demo,dc=local"
+  bind_password: "admin"
+  base_dn: "dc=demo,dc=local"
+  users_ou: "ou=people,dc=demo,dc=local"
+  groups_ou: "ou=groups,dc=demo,dc=local"
+
+# ─── PostgreSQL Connection ───────────────────────────────────────────────────
+database:
+  host: "postgres"
+  port: 5432
+  name: "db"
+  user: "postgres"
+  password: "postgres"
+
+# ─── SMTP / Email Notifications ─────────────────────────────────────────────
+# An email with an HTML summary table is sent after each sync run that produces
+# at least one change.  Remove or comment out this section to disable emails.
+smtp:
+  host: "smtp-mail.xxxx.com"
+  port: 587
+  starttls: true
+  user: "mailing@feuerwehr-landau.de"
+  password: "xxxxxx"
+  from: "mailing@feuerwehr-landau.de"
+  to:
+    - "calvin.reibenspiess@feuerwehr-landau.de"
+
+# ─── Group Mappings File ─────────────────────────────────────────────────────
+# Path to the YAML file that contains the group_mappings list.
+# Relative paths are resolved relative to this config file's directory.
+# Set an absolute path if the mappings file lives elsewhere.
+group_mappings_file: "./group-mappings.yaml"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ldap-usergroup-sync — Group membership synchroniser
-Version 2 — 2026-04-07
+Version 2 — 2026-04-09
 
 Reads group memberships from PostgreSQL and keeps existing LDAP groups in sync.
 Only modifies groups explicitly listed in the group mappings config.
@@ -379,6 +379,7 @@ def sync_group(
     for member_dn in sorted(current_lower - desired_lower):
         log_change("remove", group_cn, member_dn)
         ldap_modify(ldap_conn, group_dn, {"member": [(MODIFY_DELETE, [member_dn])]}, dry_run)
+        # Extract uid from DN (e.g. "uid=P-1001,ou=..." → "P-1001")
         rdn = member_dn.split(",", 1)[0]
         removed_uid = rdn.split("=", 1)[1] if "=" in rdn else ""
         changes.append({
