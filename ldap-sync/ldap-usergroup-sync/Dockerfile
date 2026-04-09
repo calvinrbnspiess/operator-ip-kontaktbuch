@@ -1,10 +1,13 @@
 FROM debian:bookworm-slim
 
-# Install all required runtime tools in one layer
+# Install runtime dependencies in one layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash \
       python3 \
       python3-yaml \
+      python3-ldap3 \
+      python3-psycopg2 \
+      python3-jinja2 \
       ldap-utils \
       postgresql-client \
       cron \
@@ -14,17 +17,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt/ldap-usergroup-sync
 
 # Copy scripts and config
-COPY sync.sh   ./sync.sh
-COPY seed.sh   ./seed.sh
-COPY config.yaml ./config.yaml
+COPY sync.py              ./sync.py
+COPY seed.sh              ./seed.sh
+COPY config.yaml          ./config.yaml
+COPY group-mappings.yaml  ./group-mappings.yaml
 
-RUN chmod +x sync.sh seed.sh \
+RUN chmod +x seed.sh sync.py \
     && mkdir -p logs
 
 # ── Cron entry ──────────────────────────────────────────────────────────────
 # Runs every night at 02:00.  Adjust the schedule as needed.
 # Logs go to /opt/ldap-usergroup-sync/logs/  (mount as a volume to persist them).
-RUN echo "0 2 * * * root /opt/ldap-usergroup-sync/sync.sh \
+RUN echo "0 2 * * * root /opt/ldap-usergroup-sync/sync.py \
       --config /opt/ldap-usergroup-sync/config.yaml \
       >> /opt/ldap-usergroup-sync/logs/cron.log 2>&1" \
       > /etc/cron.d/ldap-usergroup-sync \

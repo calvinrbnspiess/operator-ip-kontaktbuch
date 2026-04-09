@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Version 1 — 15-03-2026
 # ═══════════════════════════════════════════════════════════════════════════
-# test.sh — Integration tests for sync.sh
+# test.sh — Integration tests for sync.py
 #
 # Each test:
 #   1. Arranges : puts DB + LDAP into a specific known state
@@ -12,15 +12,14 @@
 # Run inside the Docker container (same environment as sync.sh):
 #   ./test.sh [--config <path>]
 #
-# The test config inherits LDAP/DB connection settings from config.yaml but
-# restricts person_type_ids to [99] (TestIsoliert — created by this script)
-# so that real persons AND seed.sh persons (type 5) are never touched.
-# All test persons use personNumbers 8011–8016.
+# The test config inherits LDAP/DB connection settings from config.yaml and
+# replaces group_mappings with test-specific entries.  SMTP is stripped so no
+# real emails are sent.  All test persons use personNumbers 8011–8016.
 #
 # Departments and functions reuse existing DB rows (Landau-Stadt id=10,
 # Atemschutzgeräteträger/in id=3) to avoid needing knowledge of the full
-# departments/functions table schema.  Isolation is guaranteed by the
-# person_type_ids=[99] filter — only our test persons appear in any query.
+# departments/functions table schema.  Test isolation is achieved by using
+# person_type_ids=99 persons that only exist during test runs.
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 IFS=$'\n\t'
@@ -38,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Load LDAP + DB connection settings from config.yaml ──────────────────
-# Store the python output in a variable first (matching sync.sh's pattern),
+# Store the python output in a variable first (matching sync.py's pattern),
 # which avoids a bash -n quirk with heredocs inside eval "$(...)" when a
 # case statement precedes it.
 _config_exports="$(python3 - "${CONFIG_FILE}" <<'PYEOF'
@@ -49,22 +48,19 @@ def esc(v):
     return "'" + str(v).replace("'", "'\\''") + "'"
 l = c['ldap']
 d = c['database']
-s = c['sync']
 for name, val in [
-    ("LDAP_HOST",       l['host']),
-    ("LDAP_PORT",       l['port']),
-    ("LDAP_BIND_DN",    l['bind_dn']),
-    ("LDAP_BIND_PW",    l['bind_password']),
-    ("LDAP_BASE_DN",    l['base_dn']),
-    ("LDAP_USERS_OU",   l['users_ou']),
-    ("LDAP_GROUPS_OU",  l['groups_ou']),
-    ("SYNC_HOME_BASE",  s.get('home_base', '/home')),
-    ("SYNC_GID_NUMBER", str(s.get('gid_number', 100))),
-    ("DB_HOST",         d['host']),
-    ("DB_PORT",         d['port']),
-    ("DB_NAME",         d['name']),
-    ("DB_USER",         d['user']),
-    ("DB_PASS",         d['password']),
+    ("LDAP_HOST",      l['host']),
+    ("LDAP_PORT",      l['port']),
+    ("LDAP_BIND_DN",   l['bind_dn']),
+    ("LDAP_BIND_PW",   l['bind_password']),
+    ("LDAP_BASE_DN",   l['base_dn']),
+    ("LDAP_USERS_OU",  l['users_ou']),
+    ("LDAP_GROUPS_OU", l['groups_ou']),
+    ("DB_HOST",        d['host']),
+    ("DB_PORT",        d['port']),
+    ("DB_NAME",        d['name']),
+    ("DB_USER",        d['user']),
+    ("DB_PASS",        d['password']),
 ]:
     print(f"{name}={esc(val)}")
 PYEOF
@@ -89,13 +85,12 @@ DB_ID_EVE=9805
 DB_ID_FRANK=9806
 
 # Person type used exclusively for test persons.
-# Type 99 does not exist in production; the test config filters for [99] only,
-# so seed.sh persons (type 5) and real persons (type 1) are never touched.
+# Type 99 does not exist in production — used to distinguish test fixture rows.
 TEST_PERSON_TYPE=99
 
 # Reuse existing departments/functions — avoids needing to know their full
-# table schema.  Only test persons (type 99) ever appear in these groups
-# because the sync config filters by person_type_ids=[99].
+# table schema.  Test isolation relies on test persons having type 99 and
+# unique test-prefixed LDAP group names (test-landau-stadt, test-atemschutz).
 TEST_DEPT_ID=10                            # Landau-Stadt (pre-existing)
 TEST_DEPT_NAME="Landau-Stadt"
 TEST_FUNC_ID=3                             # Atemschutzgeräteträger/in (pre-existing)
@@ -177,33 +172,6 @@ ldap_get_members() {
 # Each assert_* function appends to _assertion_failures if the condition
 # is not met.  _report_result() reads this array.
 
-assert_ldap_user_exists() {
-  local uid="$1"
-  if ! ldap_entry_exists "uid=${uid},${LDAP_USERS_OU}"; then
-    _assertion_failures+=("User '${uid}' should exist in LDAP but does not")
-  fi
-}
-
-assert_ldap_user_missing() {
-  local uid="$1"
-  if ldap_entry_exists "uid=${uid},${LDAP_USERS_OU}"; then
-    _assertion_failures+=("User '${uid}' should NOT exist in LDAP but does")
-  fi
-}
-
-assert_ldap_user_has_posix() {
-  local uid="$1"
-  local count
-  count=$(ldapsearch -x -LLL \
-    -H "ldap://${LDAP_HOST}:${LDAP_PORT}" \
-    -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" \
-    -b "${LDAP_USERS_OU}" "(uid=${uid})" objectClass 2>/dev/null \
-    | grep -c "^objectClass: posixAccount" || true)
-  if [[ "${count}" -eq 0 ]]; then
-    _assertion_failures+=("User '${uid}' should have posixAccount objectClass but does not")
-  fi
-}
-
 assert_ldap_group_exists() {
   local group_cn="$1"
   if ! ldap_entry_exists "cn=${group_cn},${LDAP_GROUPS_OU}"; then
@@ -263,9 +231,10 @@ import sys, yaml
 with open(sys.argv[1]) as fh:
     config = yaml.safe_load(fh)
 
-# Restrict to type 99 (TestIsoliert) so neither production persons (type 1)
-# nor seed.sh persons (type 5) are ever touched during tests.
-config['sync']['person_type_ids'] = [99]
+# Strip sections not needed (or that would cause side-effects) in tests.
+config.pop('smtp', None)
+config.pop('sync', None)
+config.pop('group_mappings_file', None)
 
 # Replace group_mappings with whatever was passed on the command line.
 config['group_mappings'] = []
@@ -282,15 +251,13 @@ print(yaml.dump(config, allow_unicode=True, default_flow_style=False))
 PYEOF
 }
 
-# Run sync.sh with the test config.  We call it via `bash` rather than
-# executing it directly so that it works even if the mounted host directory
-# does not have the execute bit set (common with bind mounts on macOS/Windows).
-# Output is suppressed; sync.sh still writes to its own log file.
+# Run sync.py with the test config.
+# Output is suppressed; sync.py still writes to its own log file.
 run_sync() {
   local rc=0
-  bash "${SCRIPT_DIR}/sync.sh" --config "${TEST_CONFIG}" > /dev/null 2>&1 || rc=$?
+  python3 "${SCRIPT_DIR}/sync.py" --config "${TEST_CONFIG}" > /dev/null 2>&1 || rc=$?
   if [[ ${rc} -ne 0 ]]; then
-    echo "  NOTE: sync.sh exited with status ${rc} — check the log file"
+    echo "  NOTE: sync.py exited with status ${rc} — check the log file"
   fi
 }
 
@@ -312,13 +279,6 @@ report_result() {
 }
 
 # ── Cleanup helpers ───────────────────────────────────────────────────────
-
-# Remove test LDAP users (called at the start of Phase 1 tests and at teardown).
-delete_test_ldap_users() {
-  for p_num in ${P_ALICE} ${P_BOB} ${P_CAROL} ${P_DAVE} ${P_EVE} ${P_FRANK}; do
-    ldap_delete "uid=P-${p_num},${LDAP_USERS_OU}"
-  done
-}
 
 # Remove test LDAP groups.
 delete_test_ldap_groups() {
@@ -390,102 +350,21 @@ global_teardown() {
   echo ""
   echo "Cleaning up all test data …"
   delete_test_db_memberships
-  delete_test_ldap_users
   delete_test_ldap_groups
   rm -f "${TEST_CONFIG}"
   echo "  → Done"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PHASE 1 TESTS — User synchronisation
+# TESTS — Group membership synchronisation
 # ═══════════════════════════════════════════════════════════════════════════
 
-test_T01_new_user_is_created_in_ldap() {
-  echo "T01: Active person in DB but absent from LDAP → user is created with POSIX attributes"
+test_T05_absent_group_is_skipped_not_created() {
+  echo "T05: Group absent from LDAP, members in DB → sync skips it (no group creation)"
   _assertion_failures=()
 
-  # Arrange: make sure Alice does not exist in LDAP
-  delete_test_ldap_users
-  write_test_config   # no group mappings needed for a user-only test
-
-  # Act
-  run_sync
-
-  # Assert: Alice should now exist and have posixAccount
-  assert_ldap_user_exists    "P-${P_ALICE}"
-  assert_ldap_user_has_posix "P-${P_ALICE}"
-
-  report_result "T01"
-}
-
-test_T02_existing_user_without_posix_gets_posix_added() {
-  echo "T02: User in LDAP without posixAccount → sync adds posixAccount"
-  _assertion_failures=()
-
-  # Arrange: put Bob in LDAP as a plain inetOrgPerson (no POSIX attributes)
-  ldap_delete "uid=P-${P_BOB},${LDAP_USERS_OU}"
-  ldap_add_entry "dn: uid=P-${P_BOB},${LDAP_USERS_OU}
-objectClass: inetOrgPerson
-uid: P-${P_BOB}
-cn: Bob Tester
-sn: Tester
-givenName: Bob
-userPassword: OldPassword1!"
-
-  write_test_config
-
-  # Act
-  run_sync
-
-  # Assert: posixAccount should have been added to the existing entry
-  assert_ldap_user_has_posix "P-${P_BOB}"
-
-  report_result "T02"
-}
-
-test_T03_inactive_user_is_not_created() {
-  echo "T03: Inactive person (active=false) → not created in LDAP"
-  _assertion_failures=()
-
-  # Arrange: Dave is inactive in the DB; ensure he is absent from LDAP
-  ldap_delete "uid=P-${P_DAVE},${LDAP_USERS_OU}"
-  write_test_config
-
-  # Act
-  run_sync
-
-  # Assert: Dave must remain absent
-  assert_ldap_user_missing "P-${P_DAVE}"
-
-  report_result "T03"
-}
-
-test_T04_wrong_persontype_is_not_synced() {
-  echo "T04: Person with persontypeId not in the filter list → not synced"
-  _assertion_failures=()
-
-  # Arrange: Eve has persontypeId=2; the test config only allows type 5.
-  ldap_delete "uid=P-${P_EVE},${LDAP_USERS_OU}"
-  write_test_config
-
-  # Act
-  run_sync
-
-  # Assert: Eve must remain absent
-  assert_ldap_user_missing "P-${P_EVE}"
-
-  report_result "T04"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PHASE 2 TESTS — Group membership synchronisation
-# ═══════════════════════════════════════════════════════════════════════════
-
-test_T05_new_group_is_created_with_correct_members() {
-  echo "T05: Group absent from LDAP, members in DB → group is created with all members"
-  _assertion_failures=()
-
-  # Arrange: Alice and Bob are both in the test department; no LDAP group yet
+  # Arrange: Alice and Bob are in the test department, but the LDAP group does
+  # not exist.  The sync must not create the group — it only manages existing ones.
   delete_test_db_memberships
   delete_test_ldap_groups
   db_exec "
@@ -501,11 +380,8 @@ test_T05_new_group_is_created_with_correct_members() {
   # Act
   run_sync
 
-  # Assert: group created with both Alice and Bob, tagged as department
-  assert_ldap_group_exists                   "${TEST_LDAP_GROUP_DEPT}"
-  assert_ldap_group_has_member               "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member               "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_has_business_category    "${TEST_LDAP_GROUP_DEPT}" "department"
+  # Assert: the LDAP group must still not exist
+  assert_ldap_group_missing "${TEST_LDAP_GROUP_DEPT}"
 
   report_result "T05"
 }
@@ -620,6 +496,7 @@ test_T09_future_memberFrom_is_not_yet_active() {
   # Arrange:
   #   Frank's membership starts tomorrow — too early to sync
   #   Alice's membership is already active
+  #   LDAP group pre-created with Alice so sync has a group to work with
   delete_test_db_memberships
   delete_test_ldap_groups
   db_exec "
@@ -629,6 +506,12 @@ test_T09_future_memberFrom_is_not_yet_active() {
       (${DB_ID_FRANK}, ${TEST_DEPT_ID}, (NOW() + INTERVAL '1 day')::date, NULL),
       (${DB_ID_ALICE}, ${TEST_DEPT_ID}, '2020-01-01', NULL);
   "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_DEPT},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_DEPT}
+description: Test dept group
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -686,6 +569,7 @@ test_T11_future_validFrom_for_function_excluded() {
   # Arrange:
   #   Frank's function assignment starts tomorrow (not yet valid)
   #   Alice's assignment is already active
+  #   LDAP group pre-created with Alice (no businessCategory, sync will add it)
   delete_test_db_memberships
   delete_test_ldap_groups
   db_exec "
@@ -695,13 +579,19 @@ test_T11_future_validFrom_for_function_excluded() {
       (${DB_ID_FRANK}, ${TEST_FUNC_ID}, (NOW() + INTERVAL '1 day')::date, NULL),
       (${DB_ID_ALICE}, ${TEST_FUNC_ID}, '2021-01-01', NULL);
   "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_FUNC}
+description: Test func group
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_FUNC}:function:${TEST_FUNC_NAME}:Test func group"
 
   # Act
   run_sync
 
-  # Assert: Alice added, Frank not; group tagged as function
+  # Assert: Alice stays, Frank not added; group tagged as function
   assert_ldap_group_has_member             "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
   assert_ldap_group_lacks_member           "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_FRANK},${LDAP_USERS_OU}"
   assert_ldap_group_has_business_category  "${TEST_LDAP_GROUP_FUNC}" "function"
@@ -713,7 +603,9 @@ test_T12_person_appears_in_multiple_groups() {
   echo "T12: Person qualifies for both a department group and a function group → added to both"
   _assertion_failures=()
 
-  # Arrange: Alice has both a department membership and a function assignment
+  # Arrange: Alice has both a department membership and a function assignment.
+  # Both LDAP groups are pre-created (empty placeholder member used at creation,
+  # sync will set the correct membership).
   delete_test_db_memberships
   delete_test_ldap_groups
   db_exec "
@@ -728,6 +620,18 @@ test_T12_person_appears_in_multiple_groups() {
     VALUES
       (${DB_ID_ALICE}, ${TEST_FUNC_ID}, '2020-01-01', NULL);
   "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_DEPT},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_DEPT}
+description: Test dept group
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_FUNC}
+description: Test func group
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   # Config maps both groups — sync processes each independently
   write_test_config \
@@ -807,7 +711,7 @@ test_T15_sync_is_idempotent() {
   echo "T15: Running sync twice produces the same LDAP state (no duplicate members)"
   _assertion_failures=()
 
-  # Arrange: Alice is in the department; no LDAP group yet
+  # Arrange: Alice is in the department; LDAP group pre-created with only Alice
   delete_test_db_memberships
   delete_test_ldap_groups
   db_exec "
@@ -816,6 +720,12 @@ test_T15_sync_is_idempotent() {
     VALUES
       (${DB_ID_ALICE}, ${TEST_DEPT_ID}, '2020-01-01', NULL);
   "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_DEPT},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_DEPT}
+description: Test dept group
+member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -829,34 +739,6 @@ test_T15_sync_is_idempotent() {
   assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T15"
-}
-
-test_T17_group_without_description_is_created_correctly() {
-  echo "T17: Group mapping with no description → group still created (no blank-line LDIF bug)"
-  _assertion_failures=()
-
-  # This test guards against a specific bug where an empty description caused
-  # a blank line in the LDIF, splitting the add record and silently failing.
-  delete_test_db_memberships
-  delete_test_ldap_groups
-  db_exec "
-    INSERT INTO public.persondepartments
-      (\"personId\", \"departmentId\", \"memberFrom\", \"memberUntil\")
-    VALUES
-      (${DB_ID_ALICE}, ${TEST_DEPT_ID}, '2020-01-01', NULL);
-  "
-
-  # Pass an empty description (four-field format with trailing colon but no value)
-  write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:"
-
-  # Act
-  run_sync
-
-  # Assert: group was created despite empty description
-  assert_ldap_group_exists     "${TEST_LDAP_GROUP_DEPT}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-
-  report_result "T17"
 }
 
 test_T16_user_with_multiple_roles_removed_from_one_group() {
@@ -910,86 +792,6 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   report_result "T16"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
-# TESTS — Password behaviour
-# ═══════════════════════════════════════════════════════════════════════════
-
-test_T18_new_user_has_ssha_password_when_enabled() {
-  echo "T18: set_default_password=true → new user's userPassword is stored as {SSHA}"
-  _assertion_failures=()
-
-  # Arrange: Alice is not in LDAP; the test config has set_default_password=true
-  delete_test_ldap_users
-  write_test_config   # no group mappings needed
-
-  # Act
-  run_sync
-
-  # Assert: Alice exists and her userPassword attribute starts with {SSHA}
-  assert_ldap_user_exists "P-${P_ALICE}"
-
-  local pw_line
-  pw_line=$(ldapsearch -x -LLL \
-    -H "ldap://${LDAP_HOST}:${LDAP_PORT}" \
-    -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" \
-    -b "${LDAP_USERS_OU}" "(uid=P-${P_ALICE})" userPassword 2>/dev/null \
-    | grep "^userPassword" | head -1)
-
-  if [[ -z "${pw_line}" ]]; then
-    _assertion_failures+=("User 'P-${P_ALICE}' should have a userPassword attribute but does not")
-  elif echo "${pw_line}" | grep -q "^userPassword:: "; then
-    # ldapsearch uses '::' and base64-encodes the value when it contains binary
-    # data (which SSHA hashes always do).  Decode it and check the prefix.
-    local decoded
-    decoded=$(echo "${pw_line}" | sed 's/^userPassword:: //' | base64 -d 2>/dev/null || true)
-    if ! echo "${decoded}" | grep -q "^{SSHA}"; then
-      _assertion_failures+=("User 'P-${P_ALICE}' decoded userPassword should start with {SSHA} but got: ${decoded}")
-    fi
-  elif ! echo "${pw_line}" | grep -q "{SSHA}"; then
-    _assertion_failures+=("User 'P-${P_ALICE}' userPassword should be an SSHA hash but got: ${pw_line}")
-  fi
-
-  report_result "T18"
-}
-
-test_T19_new_user_has_no_password_when_disabled() {
-  echo "T19: set_default_password=false → new user has no userPassword attribute (locked account)"
-  _assertion_failures=()
-
-  # Arrange: Alice is not in LDAP; override set_default_password to false
-  # by writing a test config with the property disabled.
-  delete_test_ldap_users
-
-  python3 - "${CONFIG_FILE}" > "${TEST_CONFIG}" <<'PYEOF'
-import sys, yaml
-with open(sys.argv[1]) as fh:
-    config = yaml.safe_load(fh)
-config['sync']['person_type_ids'] = [99]
-config['sync']['set_default_password'] = False
-config['group_mappings'] = []
-print(yaml.dump(config, allow_unicode=True, default_flow_style=False))
-PYEOF
-
-  # Act
-  run_sync
-
-  # Assert: Alice exists but has NO userPassword attribute
-  assert_ldap_user_exists "P-${P_ALICE}"
-
-  local pw_value
-  pw_value=$(ldapsearch -x -LLL \
-    -H "ldap://${LDAP_HOST}:${LDAP_PORT}" \
-    -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" \
-    -b "${LDAP_USERS_OU}" "(uid=P-${P_ALICE})" userPassword 2>/dev/null \
-    | grep "^userPassword:" | head -1 || true)
-
-  if [[ -n "${pw_value}" ]]; then
-    _assertion_failures+=("User 'P-${P_ALICE}' should have NO userPassword but got: ${pw_value}")
-  fi
-
-  report_result "T19"
-}
-
 test_T20_existing_group_without_business_category_gets_it_added() {
   echo "T20: Group already in LDAP without businessCategory → sync adds the attribute"
   _assertion_failures=()
@@ -1037,15 +839,8 @@ main() {
   global_setup
 
   echo ""
-  echo "── Phase 1: User synchronisation ───────────────"
-  test_T01_new_user_is_created_in_ldap
-  test_T02_existing_user_without_posix_gets_posix_added
-  test_T03_inactive_user_is_not_created
-  test_T04_wrong_persontype_is_not_synced
-
-  echo ""
-  echo "── Phase 2: Group membership synchronisation ───"
-  test_T05_new_group_is_created_with_correct_members
+  echo "── Group membership synchronisation ────────────"
+  test_T05_absent_group_is_skipped_not_created
   test_T06_stale_ldap_member_is_removed
   test_T07_missing_member_is_added_to_existing_group
   test_T08_expired_department_membership_excluded
@@ -1057,12 +852,6 @@ main() {
   test_T14_no_eligible_db_members_means_no_group_created
   test_T15_sync_is_idempotent
   test_T16_user_with_multiple_roles_removed_from_one_group
-  test_T17_group_without_description_is_created_correctly
-
-  echo ""
-  echo "── Password behaviour ───────────────────────────"
-  test_T18_new_user_has_ssha_password_when_enabled
-  test_T19_new_user_has_no_password_when_disabled
 
   echo ""
   echo "── Group metadata ───────────────────────────────"

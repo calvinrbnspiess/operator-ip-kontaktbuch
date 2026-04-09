@@ -1,6 +1,7 @@
-# Version 1 — 15-03-2026
-# ─── ldap-usergroup-sync configuration ─────────────────────────────────────
-# Only groups listed under group_mappings will ever be touched by this tool.
+# Version 2 — 2026-04-07
+# ─── ldap-usergroup-sync configuration ──────────────────────────────────────
+# This file holds connection credentials for LDAP, PostgreSQL, and SMTP.
+# Group mappings live in the file pointed to by group_mappings_file below.
 
 # ─── LDAP Connection ────────────────────────────────────────────────────────
 ldap:
@@ -13,8 +14,6 @@ ldap:
   groups_ou: "ou=groups,dc=ffld,dc=de"
 
 # ─── PostgreSQL Connection ───────────────────────────────────────────────────
-# Use the Docker service name "postgres" when running inside Docker network,
-# or "localhost" / a remote IP for direct access.
 database:
   host: "postgres"
   port: 5432
@@ -22,76 +21,21 @@ database:
   user: "postgres"
   password: "postgres"
 
-# ─── Sync Behaviour ─────────────────────────────────────────────────────────
-sync:
-  # Base path for POSIX home directories  →  /home/p-{personNumber}
-  home_base: "/home"
+# ─── SMTP / Email Notifications ─────────────────────────────────────────────
+# An email with an HTML summary table is sent after each sync run that produces
+# at least one change.  Remove or comment out this section to disable emails.
+smtp:
+  host: "smtp-mail.outlook.com"
+  port: 587
+  starttls: true
+  user: "mailing@feuerwehr-landau.de"
+  password: "5XC/edf8daewq3r"
+  from: "mailing@feuerwehr-landau.de"
+  to:
+    - "calvin.reibenspiess@feuerwehr-landau.de"
 
-  # POSIX primary group ID added to every synced user
-  gid_number: 100
-
-  # Automatically create LDAP users for persons not yet present in LDAP
-  create_users: true
-
-  # Whether to set a default password when a new user is created.
-  # Set to false to create accounts in a locked state (no authentication
-  # possible until an admin sets a password explicitly).
-  set_default_password: true
-
-  # The default password stored as an SSHA hash when set_default_password is true.
-  # Users should change this on first login.
-  default_password: "ChangeMe123!"
-
-  # Restrict sync to specific persontypeId values.
-  # Leave empty ([]) to sync every active person that has a personNumber.
-  # Known types:  1 = eigenes Personal
-  #               2 = externe Kräfte
-  #               3 = Mitarbeiter Stadtverwaltung
-  #               4 = KatS-Stab
-  #               5 = Testperson
-  person_type_ids: [1, 5]
-
-# ─── Group Mappings ──────────────────────────────────────────────────────────
-# ONLY these groups will be created or modified.  All other LDAP groups remain
-# completely untouched.
-#
-# Fields:
-#   ldap_group   – cn of the group in LDAP (will be created if missing)
-#   type         – "department"  →  persondepartments join departments.name
-#                  "function"    →  personfunctions join functions.name
-#   source       – Exact name of the department or function in the database
-#   description  – Optional; stored as a LDAP description attribute
-#
-# Date ranges (memberFrom/memberUntil, validFrom/validUntil) are enforced
-# automatically.  A NULL boundary means "open-ended".
-
-group_mappings:
-  - ldap_group: "atemschutz"
-    type: function
-    source: "Atemschutzgeräteträger/in"
-    description: "Aktive Atemschutzgeräteträger"
-
-  - ldap_group: "korbfahrer"
-    type: function
-    source: "Korbfahrer"
-    description: "Korbfahrer"
-
-  - ldap_group: "landau-stadt"
-    type: department
-    source: "Landau-Stadt"
-    description: "Angehörige der Einheit Landau-Stadt"
-
-  - ldap_group: "landau-dammheim"
-    type: department
-    source: "Landau-Dammheim"
-    description: "Angehörige der Einheit Landau-Dammheim"
-
-  - ldap_group: "it-fachguru"
-    type: function
-    source: "IT FachGuru"
-    description: "IT-Spezialisten"
-
-  - ldap_group: "gefahrstoffzug"
-    type: department
-    source: "Gefahrstoffzug"
-    description: "Angehörige des Gefahrstoffzuges"
+# ─── Group Mappings File ─────────────────────────────────────────────────────
+# Path to the YAML file that contains the group_mappings list.
+# Relative paths are resolved relative to this config file's directory.
+# Set an absolute path if the mappings file lives elsewhere.
+group_mappings_file: "./group-mappings.yaml"

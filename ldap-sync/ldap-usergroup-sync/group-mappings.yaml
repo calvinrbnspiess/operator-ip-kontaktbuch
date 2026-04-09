@@ -1,0 +1,45 @@
+# ─── Group Mappings ───────────────────────────────────────────────────────────
+# ONLY groups listed here will ever be modified.  All other LDAP groups remain
+# completely untouched.  Groups must already exist in LDAP — this tool never
+# creates new groups automatically.
+#
+# Fields:
+#   ldap_group   – cn of the group in LDAP (must already exist)
+#   type         – "department"  →  persondepartments join departments.name
+#                  "function"    →  personfunctions join functions.name
+#   source       – Exact name of the department or function in the database
+#   description  – Optional; informational only (not written to LDAP)
+#
+# Date ranges (memberFrom/memberUntil, validFrom/validUntil) are enforced
+# automatically.  A NULL boundary means "open-ended".
+
+group_mappings:
+  - ldap_group: "atemschutz"
+    type: function
+    source: "Atemschutzgeräteträger/in"
+    description: "Aktive Atemschutzgeräteträger"
+
+  - ldap_group: "korbfahrer"
+    type: function
+    source: "Korbfahrer"
+    description: "Korbfahrer"
+
+  - ldap_group: "landau-stadt"
+    type: department
+    source: "Landau-Stadt"
+    description: "Angehörige der Einheit Landau-Stadt"
+
+  - ldap_group: "landau-dammheim"
+    type: department
+    source: "Landau-Dammheim"
+    description: "Angehörige der Einheit Landau-Dammheim"
+
+  - ldap_group: "it-fachguru"
+    type: function
+    source: "IT FachGuru"
+    description: "IT-Spezialisten"
+
+  - ldap_group: "gefahrstoffzug"
+    type: department
+    source: "Gefahrstoffzug"
+    description: "Angehörige des Gefahrstoffzuges"
