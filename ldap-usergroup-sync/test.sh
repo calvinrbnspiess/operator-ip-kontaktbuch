@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 2 — 09-04-2026
+# Version 3 — 2026-04-17
 # ═══════════════════════════════════════════════════════════════════════════
 # test.sh — Integration tests for sync.py
 #
@@ -391,8 +391,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=old-user,${LDAP_USERS_OU}
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=old-user,${LDAP_USERS_OU}
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -400,8 +400,8 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: old-user removed, Alice stays
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=old-user,${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=old-user,${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T02"
 }
@@ -425,7 +425,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -433,8 +433,8 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: both Alice and Bob are now members
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
 
   report_result "T03"
 }
@@ -461,8 +461,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=P-${P_CAROL},${LDAP_USERS_OU}
-member: uid=P-${P_BOB},${LDAP_USERS_OU}"
+member: cn=P-${P_CAROL},${LDAP_USERS_OU}
+member: cn=P-${P_BOB},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -470,8 +470,8 @@ member: uid=P-${P_BOB},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Carol out (expired), Bob stays
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
 
   report_result "T04"
 }
@@ -498,7 +498,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -506,8 +506,8 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice is in the group, Frank is not
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_FRANK},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_FRANK},${LDAP_USERS_OU}"
 
   report_result "T05"
 }
@@ -534,8 +534,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: uid=P-${P_CAROL},${LDAP_USERS_OU}
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_CAROL},${LDAP_USERS_OU}
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_FUNC}:function:${TEST_FUNC_NAME}:Test func group"
 
@@ -543,8 +543,8 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Carol removed (expired cert), Alice stays
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T06"
 }
@@ -571,7 +571,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_FUNC}:function:${TEST_FUNC_NAME}:Test func group"
 
@@ -579,8 +579,8 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice stays, Frank not added
-  assert_ldap_group_has_member             "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member           "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_FRANK},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member             "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member           "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_FRANK},${LDAP_USERS_OU}"
 
   report_result "T07"
 }
@@ -611,13 +611,13 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   # Config maps both groups — sync processes each independently
   write_test_config \
@@ -628,8 +628,8 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice is a member of both LDAP groups
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T08"
 }
@@ -655,8 +655,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}
-member: uid=P-${P_BOB},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}
+member: cn=P-${P_BOB},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -664,9 +664,9 @@ member: uid=P-${P_BOB},${LDAP_USERS_OU}"
   run_sync
 
   # Assert
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T09"
 }
@@ -711,7 +711,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -720,9 +720,9 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice is in the group; Bob and Carol are NOT (no phantom additions)
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T11"
 }
@@ -756,13 +756,13 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config \
     "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group" \
@@ -772,8 +772,8 @@ member: uid=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice stays in dept group, is removed from func group
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "uid=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T12"
 }

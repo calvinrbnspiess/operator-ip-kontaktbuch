@@ -188,41 +188,41 @@ echo "  → Function assignments inserted (Peter's Atemschutz cert is expired)"
 echo ""
 echo "── LDAP: creating OUs ──"
 
-if ! ldap_entry_exists "ou=people,${LDAP_BASE_DN}"; then
-  ldap_add "dn: ou=people,${LDAP_BASE_DN}
+if ! ldap_entry_exists "${LDAP_USERS_OU}"; then
+  ldap_add "dn: ${LDAP_USERS_OU}
 objectClass: top
 objectClass: organizationalUnit
-ou: people"
-  echo "  → Created ou=people"
+ou: Personen"
+  echo "  → Created ${LDAP_USERS_OU}"
 else
-  echo "  → ou=people already exists"
+  echo "  → ${LDAP_USERS_OU} already exists"
 fi
 
-if ! ldap_entry_exists "ou=groups,${LDAP_BASE_DN}"; then
-  ldap_add "dn: ou=groups,${LDAP_BASE_DN}
+if ! ldap_entry_exists "${LDAP_GROUPS_OU}"; then
+  ldap_add "dn: ${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: organizationalUnit
 ou: groups"
-  echo "  → Created ou=groups"
+  echo "  → Created ${LDAP_GROUPS_OU}"
 else
-  echo "  → ou=groups already exists"
+  echo "  → ${LDAP_GROUPS_OU} already exists"
 fi
 
 echo ""
 echo "── LDAP: creating test users ──"
 
 create_ldap_user() {
-  local uid="$1" cn="$2" sn="$3" given="$4"
-  local dn="uid=${uid},${LDAP_USERS_OU}"
+  local uid="$1" display_name="$2" sn="$3" given="$4"
+  local dn="cn=${uid},${LDAP_USERS_OU}"
   if ldap_entry_exists "${dn}"; then
     echo "  → User ${uid}: already exists"
   else
     ldap_add "dn: ${dn}
 objectClass: inetOrgPerson
-uid: ${uid}
-cn: ${cn}
+cn: ${uid}
 sn: ${sn}
 givenName: ${given}
+displayName: ${display_name}
 userPassword: DemoPassword1!"
     echo "  → User ${uid}: created"
   fi
@@ -246,8 +246,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: atemschutz
 description: Aktive Atemschutzgeräteträger
-member: uid=P-1004,${LDAP_USERS_OU}
-member: uid=P-1005,${LDAP_USERS_OU}"
+member: cn=P-1004,${LDAP_USERS_OU}
+member: cn=P-1005,${LDAP_USERS_OU}"
   echo "  → Group 'atemschutz': created with P-1004 (expired) + P-1005 (wrong)"
 else
   echo "  → Group 'atemschutz': already exists"
@@ -261,7 +261,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: korbfahrer
 description: Korbfahrer
-member: uid=P-1003,${LDAP_USERS_OU}"
+member: cn=P-1003,${LDAP_USERS_OU}"
   echo "  → Group 'korbfahrer': created with P-1003 (wrong member)"
 else
   echo "  → Group 'korbfahrer': already exists"
@@ -276,9 +276,9 @@ objectClass: top
 objectClass: groupOfNames
 cn: landau-stadt
 description: Angehörige der Einheit Landau-Stadt
-member: uid=P-1001,${LDAP_USERS_OU}
-member: uid=P-1005,${LDAP_USERS_OU}
-member: uid=P-1003,${LDAP_USERS_OU}"
+member: cn=P-1001,${LDAP_USERS_OU}
+member: cn=P-1005,${LDAP_USERS_OU}
+member: cn=P-1003,${LDAP_USERS_OU}"
   echo "  → Group 'landau-stadt': created with P-1001 (correct), P-1005 (expired), P-1003 (wrong)"
 else
   echo "  → Group 'landau-stadt': already exists"
@@ -292,7 +292,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: landau-dammheim
 description: Angehörige der Einheit Landau-Dammheim
-member: uid=P-1001,${LDAP_USERS_OU}"
+member: cn=P-1001,${LDAP_USERS_OU}"
   echo "  → Group 'landau-dammheim': created with P-1001 (wrong dept)"
 else
   echo "  → Group 'landau-dammheim': already exists"
@@ -306,7 +306,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: wehrfuehrer
 description: Wehrführer
-member: uid=P-1001,${LDAP_USERS_OU}"
+member: cn=P-1001,${LDAP_USERS_OU}"
   echo "  → Group 'wehrfuehrer': created with P-1001 (wrong member)"
 else
   echo "  → Group 'wehrfuehrer': already exists"
@@ -320,7 +320,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: gefahrstoffzug
 description: Angehörige des Gefahrstoffzuges
-member: uid=P-1002,${LDAP_USERS_OU}"
+member: cn=P-1002,${LDAP_USERS_OU}"
   echo "  → Group 'gefahrstoffzug': created with P-1002 (wrong member)"
 else
   echo "  → Group 'gefahrstoffzug': already exists"

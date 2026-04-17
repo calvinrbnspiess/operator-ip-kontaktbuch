@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ldap-usergroup-sync — Group membership synchroniser
-Version 2 — 2026-04-09
+Version 3 — 2026-04-17
 
 Reads group memberships from PostgreSQL and keeps existing LDAP groups in sync.
 Only modifies groups explicitly listed in the group mappings config.
@@ -127,7 +127,7 @@ _DN_SPECIAL = re.compile(r'[,+"\\\<\>;=#]')
 _MEMBER_QUERIES: dict[str, str] = {
     "department": """
         SELECT DISTINCT
-               'uid=P-' || p."personNumber" || ',' || %s,
+               'cn=P-' || p."personNumber" || ',' || %s,
                p."firstName", p."lastName",
                'P-' || p."personNumber"
         FROM public.people p
@@ -142,7 +142,7 @@ _MEMBER_QUERIES: dict[str, str] = {
     """,
     "function": """
         SELECT DISTINCT
-               'uid=P-' || p."personNumber" || ',' || %s,
+               'cn=P-' || p."personNumber" || ',' || %s,
                p."firstName", p."lastName",
                'P-' || p."personNumber"
         FROM public.people p

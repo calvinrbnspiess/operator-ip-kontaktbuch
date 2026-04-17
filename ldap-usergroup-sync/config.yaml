@@ -1,4 +1,4 @@
-# Version 2 — 2026-04-09
+# Version 3 — 2026-04-17
 #
 # ─── ldap-usergroup-sync configuration ──────────────────────────────────────
 # This file holds connection credentials for LDAP, PostgreSQL, and SMTP.
@@ -11,7 +11,7 @@ ldap:
   bind_dn: "cn=admin,dc=demo,dc=local"
   bind_password: "admin"
   base_dn: "dc=demo,dc=local"
-  users_ou: "ou=people,dc=demo,dc=local"
+  users_ou: "ou=Personen,dc=demo,dc=local"
   groups_ou: "ou=groups,dc=demo,dc=local"
 
 # ─── PostgreSQL Connection ───────────────────────────────────────────────────
@@ -30,7 +30,7 @@ smtp:
   port: 587
   starttls: true
   user: "mailing@feuerwehr-landau.de"
-  password: "xxxxxx"
+  password: "xxxxxxx"
   from: "mailing@feuerwehr-landau.de"
   to:
     - "calvin.reibenspiess@feuerwehr-landau.de"
