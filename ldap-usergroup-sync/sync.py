@@ -51,15 +51,11 @@ _REPORT_TEMPLATE = _JINJA_ENV.from_string("""\
   th    { background: #f4f4f4; font-weight: bold; }
   tr:nth-child(even) { background: #fafafa; }
   code  { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
-  .badge { color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
-  .badge-add    { background: #28a745; }
-  .badge-remove { background: #dc3545; }
-  .badge-dry    { background: #f0ad4e; padding: 2px 8px; }
 </style>
 </head>
 <body>
 <h2>
-  {% if dry_run %}<span class="badge badge-dry">DRY RUN</span>&nbsp;{% endif %}
+  {% if dry_run %}<span style="color:#fff;background:#f0ad4e;padding:2px 8px;border-radius:3px;font-size:12px;">DRY RUN</span>&nbsp;{% endif %}
   LDAP Gruppenzuweisungen
 </h2>
 <p>
@@ -83,10 +79,10 @@ _REPORT_TEMPLATE = _JINJA_ENV.from_string("""\
       <td>{{ user.user_id or "—" }}</td>
       <td>
         {% for g in user.added %}
-          <span class="badge badge-add">+ {{ g }}</span>
+          <span style="color:#fff;background:#28a745;padding:2px 6px;border-radius:3px;font-size:12px;">+ {{ g }}</span>
         {% endfor %}
         {% for g in user.removed %}
-          <span class="badge badge-remove">− {{ g }}</span>
+          <span style="color:#fff;background:#dc3545;padding:2px 6px;border-radius:3px;font-size:12px;">− {{ g }}</span>
         {% endfor %}
       </td>
       <td><code style="font-size:12px">{{ user.dn }}</code></td>
@@ -209,6 +205,37 @@ def _safe_header(value: str) -> str:
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
+def _normalize_mappings(raw: list) -> list:
+    """Canonicalise mappings and merge entries that share an ldap_group.
+
+    Accepts either the legacy single-source form
+        {ldap_group, type, source, description?}
+    or the multi-source form
+        {ldap_group, sources: [{type, source}, ...], description?}.
+
+    Entries with the same ldap_group are merged: their sources are unioned
+    (order preserved, duplicates removed) so a single reconciliation pass
+    sees the full desired membership and mappings cannot overwrite each other.
+    """
+    by_group: dict[str, dict] = {}
+    order: list[str] = []
+    for m in raw:
+        group = m["ldap_group"]
+        if "sources" in m:
+            sources = [(s["type"], s["source"]) for s in m["sources"]]
+        else:
+            sources = [(m["type"], m["source"])]
+        entry = by_group.get(group)
+        if entry is None:
+            entry = {"ldap_group": group, "sources": [], "description": m.get("description", "")}
+            by_group[group] = entry
+            order.append(group)
+        for s in sources:
+            if s not in entry["sources"]:
+                entry["sources"].append(s)
+    return [by_group[g] for g in order]
+
+
 def _load_group_mappings(config_path: Path, mappings_file: str) -> list:
     mappings_path = Path(mappings_file)
     if not mappings_path.is_absolute():
@@ -222,6 +249,7 @@ def load_config(config_path: Path) -> dict:
         cfg = yaml.safe_load(fh)
     if "group_mappings_file" in cfg and "group_mappings" not in cfg:
         cfg["group_mappings"] = _load_group_mappings(config_path, cfg["group_mappings_file"])
+    cfg["group_mappings"] = _normalize_mappings(cfg.get("group_mappings", []))
     return cfg
 
 
@@ -299,22 +327,24 @@ def connect_db(cfg: dict):
 
 
 def get_desired_members(db_conn, mapping: dict, users_ou: str) -> list[tuple[str, str, str, str]]:
-    """Query PostgreSQL for the desired group members.
+    """Query PostgreSQL for the desired group members, unioned across all sources.
 
-    Returns a list of (dn, firstName, lastName, userId) tuples.
-    Uses parameterised queries throughout — no SQL injection possible.
-    personNumber is a numeric DB column; the resulting DN strings are safe.
+    Returns a list of (dn, firstName, lastName, userId) tuples, deduplicated
+    by DN (case-insensitive). Uses parameterised queries throughout — no SQL
+    injection possible. personNumber is a numeric DB column; the resulting
+    DN strings are safe.
     """
-    mtype = mapping["type"]
-    source = mapping["source"]
-
-    query = _MEMBER_QUERIES.get(mtype)
-    if query is None:
-        raise ValueError(f"Unknown mapping type: {mtype!r}")
-
+    seen: dict[str, tuple[str, str, str, str]] = {}
     with db_conn.cursor() as cur:
-        cur.execute(query, (users_ou, source))
-        return [(row[0], row[1] or "", row[2] or "", row[3]) for row in cur.fetchall()]
+        for mtype, source in mapping["sources"]:
+            query = _MEMBER_QUERIES.get(mtype)
+            if query is None:
+                raise ValueError(f"Unknown mapping type: {mtype!r}")
+            cur.execute(query, (users_ou, source))
+            for row in cur.fetchall():
+                dn, first, last, uid = row[0], row[1] or "", row[2] or "", row[3]
+                seen.setdefault(dn.lower(), (dn, first, last, uid))
+    return list(seen.values())
 
 
 # ─── Group sync ──────────────────────────────────────────────────────────────
@@ -336,10 +366,9 @@ def sync_group(
     and group_missing is True if the LDAP group does not exist.
     """
     group_cn = mapping["ldap_group"]
-    mtype = mapping.get("type", "")
-    source = mapping.get("source", "")
+    src_desc = ", ".join(f"{t}:{s}" for t, s in mapping["sources"])
 
-    logging.info("Group '%s'  type=%-12s  source='%s'", group_cn, mtype, source)
+    logging.info("Group '%s'  sources=[%s]", group_cn, src_desc)
 
     _validate_rdn_value(group_cn, "ldap_group")
 

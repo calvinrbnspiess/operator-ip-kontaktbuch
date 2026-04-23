@@ -100,6 +100,7 @@ TEST_FUNC_NAME="Atemschutzgeräteträger/in"
 # These are separate from the real "landau-stadt" / "atemschutz" groups.
 TEST_LDAP_GROUP_DEPT="test-landau-stadt"
 TEST_LDAP_GROUP_FUNC="test-atemschutz"
+TEST_LDAP_GROUP_UNION="test-union"
 
 # Track results across all tests
 PASS_COUNT=0
@@ -238,6 +239,37 @@ print(yaml.dump(config, allow_unicode=True, default_flow_style=False))
 PYEOF
 }
 
+# Write a test config with a single LDAP group fed by multiple sources
+# (new multi-source YAML syntax).
+#
+# Usage:  write_test_config_multisource GROUP_CN "type1:source1" "type2:source2" ...
+write_test_config_multisource() {
+  python3 - "${CONFIG_FILE}" "$@" > "${TEST_CONFIG}" <<'PYEOF'
+import sys, yaml
+
+with open(sys.argv[1]) as fh:
+    config = yaml.safe_load(fh)
+
+config.pop('smtp', None)
+config.pop('sync', None)
+config.pop('group_mappings_file', None)
+
+group_cn = sys.argv[2]
+sources = []
+for arg in sys.argv[3:]:
+    mtype, source = arg.split(':', 1)
+    sources.append({'type': mtype, 'source': source})
+
+config['group_mappings'] = [{
+    'ldap_group':  group_cn,
+    'sources':     sources,
+    'description': 'Multi-source test group',
+}]
+
+print(yaml.dump(config, allow_unicode=True, default_flow_style=False))
+PYEOF
+}
+
 # Run sync.py with the test config.
 # Output is suppressed; sync.py still writes to its own log file.
 run_sync() {
@@ -271,6 +303,7 @@ report_result() {
 delete_test_ldap_groups() {
   ldap_delete "cn=${TEST_LDAP_GROUP_DEPT},${LDAP_GROUPS_OU}"
   ldap_delete "cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}"
+  ldap_delete "cn=${TEST_LDAP_GROUP_UNION},${LDAP_GROUPS_OU}"
   ldap_delete "cn=test-empty-8099,${LDAP_GROUPS_OU}"
 }
 
@@ -779,6 +812,102 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 }
 
 
+test_T13_multi_source_group_unions_members() {
+  echo "T13: Group mapped to department AND function → members from both sources are unioned"
+  _assertion_failures=()
+
+  # Arrange:
+  #   Alice qualifies only via the department source.
+  #   Bob qualifies only via the function source.
+  #   Carol is pre-added to LDAP but qualifies via neither source — she must be removed.
+  #   Both sources feed the same LDAP group.
+  delete_test_db_memberships
+  delete_test_ldap_groups
+  db_exec "
+    INSERT INTO public.persondepartments
+      (\"personId\", \"departmentId\", \"memberFrom\", \"memberUntil\")
+    VALUES
+      (${DB_ID_ALICE}, ${TEST_DEPT_ID}, '2020-01-01', NULL);
+  "
+  db_exec "
+    INSERT INTO public.personfunctions
+      (\"personId\", \"funcId\", \"validFrom\", \"validUntil\")
+    VALUES
+      (${DB_ID_BOB}, ${TEST_FUNC_ID}, '2020-01-01', NULL);
+  "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_UNION},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_UNION}
+description: Multi-source test group
+member: cn=P-${P_CAROL},${LDAP_USERS_OU}"
+
+  write_test_config_multisource "${TEST_LDAP_GROUP_UNION}" \
+    "department:${TEST_DEPT_NAME}" \
+    "function:${TEST_FUNC_NAME}"
+
+  # Act
+  run_sync
+
+  # Assert: Alice added (dept), Bob added (func), Carol removed (neither)
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
+
+  report_result "T13"
+}
+
+test_T14_multi_source_dedupes_person_in_both() {
+  echo "T14: Person qualifies via BOTH sources → added exactly once (no duplicate / no LDAP error)"
+  _assertion_failures=()
+
+  # Arrange: Alice qualifies via both the department and the function.
+  # Running sync twice verifies idempotence (no phantom re-adds, no errors from
+  # a same-DN-twice add on the second pass).
+  delete_test_db_memberships
+  delete_test_ldap_groups
+  db_exec "
+    INSERT INTO public.persondepartments
+      (\"personId\", \"departmentId\", \"memberFrom\", \"memberUntil\")
+    VALUES
+      (${DB_ID_ALICE}, ${TEST_DEPT_ID}, '2020-01-01', NULL);
+  "
+  db_exec "
+    INSERT INTO public.personfunctions
+      (\"personId\", \"funcId\", \"validFrom\", \"validUntil\")
+    VALUES
+      (${DB_ID_ALICE}, ${TEST_FUNC_ID}, '2020-01-01', NULL);
+  "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_UNION},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_UNION}
+description: Multi-source test group
+member: cn=placeholder,${LDAP_USERS_OU}"
+
+  write_test_config_multisource "${TEST_LDAP_GROUP_UNION}" \
+    "department:${TEST_DEPT_NAME}" \
+    "function:${TEST_FUNC_NAME}"
+
+  # Act: two runs to catch any "attribute or value exists" issues
+  run_sync
+  run_sync
+
+  # Assert: Alice exactly once, placeholder gone
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_UNION}" "cn=placeholder,${LDAP_USERS_OU}"
+
+  local alice_count
+  alice_count=$(ldap_get_members "${TEST_LDAP_GROUP_UNION}" \
+    | grep -cxF "cn=P-${P_ALICE},${LDAP_USERS_OU}" || true)
+  if [[ "${alice_count}" -ne 1 ]]; then
+    _assertion_failures+=("Expected Alice to appear exactly once in ${TEST_LDAP_GROUP_UNION}, got ${alice_count}")
+  fi
+
+  report_result "T14"
+}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Main — run all tests
 # ═══════════════════════════════════════════════════════════════════════════
@@ -806,6 +935,8 @@ main() {
   test_T10_no_eligible_db_members_means_no_group_created
   test_T11_sync_is_idempotent
   test_T12_user_with_multiple_roles_removed_from_one_group
+  test_T13_multi_source_group_unions_members
+  test_T14_multi_source_dedupes_person_in_both
 
   global_teardown
 
