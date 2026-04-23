@@ -199,6 +199,20 @@ INSERT INTO public.personfunctions
 VALUES
   (9004, 3, '2015-01-01', '2019-12-31')
 ON CONFLICT DO NOTHING;
+
+-- Maria → Zugführer (active)
+INSERT INTO public.personfunctions
+  (\"personId\", \"funcId\", \"validFrom\", \"validUntil\")
+VALUES
+  (9002, 2, '2023-01-01', NULL)
+ON CONFLICT DO NOTHING;
+
+-- Ursula → Stellvertretender Zugführer (active — dept membership expired but function is valid)
+INSERT INTO public.personfunctions
+  (\"personId\", \"funcId\", \"validFrom\", \"validUntil\")
+VALUES
+  (9005, 4, '2023-06-01', NULL)
+ON CONFLICT DO NOTHING;
 "
 echo "  → Function assignments inserted (Peter's Atemschutz cert is expired)"
 
@@ -264,7 +278,7 @@ echo ""
 echo "── LDAP: recreating groups with intentionally stale memberships ──"
 
 # Wipe demo groups so the script is re-runnable with a predictable starting state.
-for grp in atemschutz korbfahrer landau-stadt landau-dammheim wehrfuehrer gefahrstoffzug; do
+for grp in atemschutz korbfahrer landau-stadt landau-dammheim wehrfuehrer gefahrstoffzug zugfuehrer; do
   ldap_delete "cn=${grp},${LDAP_GROUPS_OU}"
 done
 
@@ -327,6 +341,16 @@ description: Angehörige des Gefahrstoffzuges
 member: cn=P-1002,${LDAP_USERS_OU}"
 echo "  → 'gefahrstoffzug'  : P-1002 (wrong)"
 
+# zugfuehrer — P-1001 wrong (no Zugführer function). Desired: P-1002 (Zugführer) + E-4012 (Stellv.).
+# Demonstrates multi-source: both function sources merge into one LDAP group.
+ldap_add "dn: cn=zugfuehrer,${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: zugfuehrer
+description: Zugführer und Stellvertretende Zugführer
+member: cn=P-1001,${LDAP_USERS_OU}"
+echo "  → 'zugfuehrer'      : P-1001 (wrong — multi-source demo)"
+
 echo ""
 echo "════════════════════════════════════════════════"
 echo "Seeding complete."
@@ -338,10 +362,12 @@ echo "  'landau-stadt'   : +P-1002  (keep P-1001)  −E-4012 (expired) −TEST-0
 echo "  'landau-dammheim': +TEST-0034          −P-1001 (wrong)"
 echo "  'wehrfuehrer'    : +TEST-0034          −P-1001 (wrong)"
 echo "  'gefahrstoffzug' : +K-0123             −P-1002 (wrong)"
+echo "  'zugfuehrer'     : +P-1002 (Zugführer) +E-4012 (Stellv.)  −P-1001 (wrong)"
+echo "                     [multi-source: two functions merged into one group]"
 echo ""
-echo "  P-1001   : +atemschutz, +landau-stadt(kept)   −landau-dammheim, −wehrfuehrer"
-echo "  P-1002   : +atemschutz, +korbfahrer, +landau-stadt  −gefahrstoffzug"
+echo "  P-1001   : +atemschutz, +landau-stadt(kept)   −landau-dammheim, −wehrfuehrer, −zugfuehrer"
+echo "  P-1002   : +atemschutz, +korbfahrer, +landau-stadt, +zugfuehrer  −gefahrstoffzug"
 echo "  TEST-0034: +landau-dammheim, +wehrfuehrer    −korbfahrer, −landau-stadt"
 echo "  K-0123   : +gefahrstoffzug                   −atemschutz"
-echo "  E-4012   :                                   −atemschutz, −landau-stadt"
+echo "  E-4012   : +zugfuehrer                       −atemschutz, −landau-stadt"
 echo "════════════════════════════════════════════════"

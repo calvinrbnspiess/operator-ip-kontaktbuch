@@ -16,7 +16,9 @@ SELECT setval('departments_id_seq', 100);
 
 -- Functions (IDs must match seed.sh references)
 INSERT INTO public.functions (id, name, description, active) VALUES
-    ( 1, 'Wehrführer',                'Wehrführer',               true),
-    ( 3, 'Atemschutzgeräteträger/in',  'Atemschutzgeräteträger',        true),
-    (40, 'Korbfahrer',                 'Drehleiter-Korbfahrer',         true);
+    ( 1, 'Wehrführer',                  'Wehrführer',               true),
+    ( 2, 'Zugführer',                   'Zugführer',                true),
+    ( 3, 'Atemschutzgeräteträger/in',   'Atemschutzgeräteträger',   true),
+    ( 4, 'Stellvertretender Zugführer', 'Stellv. Zugführer',        true),
+    (40, 'Korbfahrer',                  'Drehleiter-Korbfahrer',    true);
 SELECT setval('functions_id_seq', 100);

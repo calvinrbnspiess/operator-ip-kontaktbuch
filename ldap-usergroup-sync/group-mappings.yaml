@@ -33,3 +33,12 @@ group_mappings:
     type: department
     source: "Gefahrstoffzug"
     description: "Angehörige des Gefahrstoffzuges"
+
+  # Multi-source example: one LDAP group fed by multiple katmin sources
+  - ldap_group: "zugfuehrer"
+    description: "Zugführer und Stellvertretende Zugführer"
+    sources:
+      - type: function
+        source: "Zugführer"
+      - type: function
+        source: "Stellvertretender Zugführer"
