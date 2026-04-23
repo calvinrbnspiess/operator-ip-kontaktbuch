@@ -120,17 +120,21 @@ _REPORT_TEMPLATE = _JINJA_ENV.from_string("""\
 
 _DN_SPECIAL = re.compile(r'[,+"\\\<\>;=#]')
 
+# The CN prefix comes from persontypes.short (e.g. 'P', 'SV', 'K', 'E', 'TEST'),
+# and the person number is zero-padded to 4 digits (389 → '0389').
 _MEMBER_QUERIES: dict[str, str] = {
     "department": """
         SELECT DISTINCT
-               'cn=P-' || p."personNumber" || ',' || %s,
+               'cn=' || pt.short || '-' || LPAD(p."personNumber"::text, 4, '0') || ',' || %s,
                p."firstName", p."lastName",
-               'P-' || p."personNumber"
+               pt.short || '-' || LPAD(p."personNumber"::text, 4, '0')
         FROM public.people p
-        JOIN public.persondepartments pd ON pd."personId" = p.id
-        JOIN public.departments       d  ON d.id = pd."departmentId"
+        JOIN public.persontypes       pt ON pt.id = p."persontypeId"
+        JOIN public.persondepartments pd ON pd."personId"     = p.id
+        JOIN public.departments       d  ON d.id              = pd."departmentId"
         WHERE p."personNumber" IS NOT NULL
           AND p.active = TRUE
+          AND pt.short IS NOT NULL
           AND d.name = %s
           AND (pd."memberFrom"  IS NULL OR pd."memberFrom"  <= NOW())
           AND (pd."memberUntil" IS NULL OR pd."memberUntil" >= NOW())
@@ -138,14 +142,16 @@ _MEMBER_QUERIES: dict[str, str] = {
     """,
     "function": """
         SELECT DISTINCT
-               'cn=P-' || p."personNumber" || ',' || %s,
+               'cn=' || pt.short || '-' || LPAD(p."personNumber"::text, 4, '0') || ',' || %s,
                p."firstName", p."lastName",
-               'P-' || p."personNumber"
+               pt.short || '-' || LPAD(p."personNumber"::text, 4, '0')
         FROM public.people p
+        JOIN public.persontypes     pt ON pt.id = p."persontypeId"
         JOIN public.personfunctions pf ON pf."personId" = p.id
-        JOIN public.functions        f  ON f.id = pf."funcId"
+        JOIN public.functions       f  ON f.id         = pf."funcId"
         WHERE p."personNumber" IS NOT NULL
           AND p.active = TRUE
+          AND pt.short IS NOT NULL
           AND f.name = %s
           AND (pf."validFrom"  IS NULL OR pf."validFrom"  <= NOW())
           AND (pf."validUntil" IS NULL OR pf."validUntil" >= NOW())
@@ -281,8 +287,13 @@ def ldap_entry_exists(conn: Connection, dn: str) -> bool:
     return bool(conn.entries)
 
 
-def get_current_members(conn: Connection, group_cn: str, groups_ou: str) -> set[str]:
-    """Return the set of current member DNs (lowercased) for the given group."""
+def get_current_members(conn: Connection, group_cn: str, groups_ou: str) -> dict[str, str]:
+    """Return current member DNs as {lowercased_dn: original_dn}.
+
+    The lowercased key is used for case-insensitive comparison; the original
+    DN is preserved so LDAP operations and the email report use the actual
+    casing stored in LDAP.
+    """
     safe_cn = escape_filter_chars(group_cn)
     conn.search(
         search_base=groups_ou,
@@ -290,9 +301,28 @@ def get_current_members(conn: Connection, group_cn: str, groups_ou: str) -> set[
         attributes=["member"],
     )
     if not conn.entries:
-        return set()
+        return {}
     members = conn.entries[0].entry_attributes_as_dict.get("member", [])
-    return {str(m).lower() for m in members}
+    return {str(m).lower(): str(m) for m in members}
+
+
+def get_ldap_person_info(conn: Connection, dn: str) -> tuple[str, str]:
+    """Return (first_name, last_name) from an LDAP person entry, or ('', '') if absent."""
+    try:
+        conn.search(
+            search_base=dn,
+            search_filter="(objectClass=*)",
+            search_scope=BASE,
+            attributes=["givenName", "sn"],
+        )
+    except Exception:
+        return "", ""
+    if not conn.entries:
+        return "", ""
+    attrs = conn.entries[0].entry_attributes_as_dict
+    first = (attrs.get("givenName") or [""])[0]
+    last = (attrs.get("sn") or [""])[0]
+    return str(first or ""), str(last or "")
 
 
 def ldap_modify(conn: Connection, dn: str, changes: dict, dry_run: bool) -> bool:
@@ -383,14 +413,14 @@ def sync_group(
 
     desired_raw = get_desired_members(db_conn, mapping, users_ou)
     if not desired_raw:
-        logging.warning("  !  Group '%s': no eligible members found in DB — skipping", group_cn)
-        return [], False
+        logging.warning("  !  Group '%s': no eligible members found in DB — will remove all current members", group_cn)
 
     # Build lookup maps: lower-cased DN → original DN and → user info
     dn_by_lower = {dn.lower(): dn for dn, _, _, _ in desired_raw}
     info_by_lower = {dn.lower(): (first, last, uid) for dn, first, last, uid in desired_raw}
     desired_lower = set(dn_by_lower)
-    current_lower = get_current_members(ldap_conn, group_cn, groups_ou)
+    current_by_lower = get_current_members(ldap_conn, group_cn, groups_ou)
+    current_lower = set(current_by_lower)
 
     changes = []
 
@@ -405,15 +435,18 @@ def sync_group(
             "user_exists": user_exists, "first_name": first, "last_name": last, "user_id": uid,
         })
 
-    for member_dn in sorted(current_lower - desired_lower):
+    for lower_dn in sorted(current_lower - desired_lower):
+        member_dn = current_by_lower[lower_dn]
         log_change("remove", group_cn, member_dn)
         ldap_modify(ldap_conn, group_dn, {"member": [(MODIFY_DELETE, [member_dn])]}, dry_run)
-        # Extract uid from DN (e.g. "uid=P-1001,ou=..." → "P-1001")
+        # Look up the person's name from LDAP so the report isn't blank
+        first, last = get_ldap_person_info(ldap_conn, member_dn)
+        # Extract uid from the DN's RDN (e.g. "cn=P-1001,ou=..." → "P-1001")
         rdn = member_dn.split(",", 1)[0]
         removed_uid = rdn.split("=", 1)[1] if "=" in rdn else ""
         changes.append({
             "group": group_cn, "action": "remove", "dn": member_dn,
-            "user_exists": True, "first_name": "", "last_name": "", "user_id": removed_uid,
+            "user_exists": True, "first_name": first, "last_name": last, "user_id": removed_uid,
         })
 
     added = sum(1 for c in changes if c["action"] == "add")
@@ -426,16 +459,18 @@ def sync_group(
 # ─── Email notification ──────────────────────────────────────────────────────
 
 def _group_changes_by_user(changes: list) -> dict:
-    """Group changes by user DN.
+    """Group changes by user DN, keyed case-insensitively but preserving original DN casing.
 
-    Returns {dn: {"added": [...], "removed": [...], "user_exists": bool,
-                   "first_name": str, "last_name": str, "user_id": str}}.
+    Returns {lower_dn: {"dn": original_dn, "added": [...], "removed": [...],
+                        "user_exists": bool, "first_name": str, "last_name": str,
+                        "user_id": str}}.
     """
     by_user = {}
     for c in changes:
-        dn = c["dn"].lower()
-        if dn not in by_user:
-            by_user[dn] = {
+        key = c["dn"].lower()
+        if key not in by_user:
+            by_user[key] = {
+                "dn": c["dn"],
                 "added": [], "removed": [],
                 "user_exists": c.get("user_exists", True),
                 "first_name": c.get("first_name", ""),
@@ -443,16 +478,16 @@ def _group_changes_by_user(changes: list) -> dict:
                 "user_id": c.get("user_id", ""),
             }
         if c["action"] == "add":
-            by_user[dn]["added"].append(c["group"])
+            by_user[key]["added"].append(c["group"])
         else:
-            by_user[dn]["removed"].append(c["group"])
+            by_user[key]["removed"].append(c["group"])
         # Enrich with name/id from any record that has them
-        if c.get("first_name") and not by_user[dn]["first_name"]:
-            by_user[dn]["first_name"] = c["first_name"]
-            by_user[dn]["last_name"] = c["last_name"]
-            by_user[dn]["user_id"] = c["user_id"]
+        if c.get("first_name") and not by_user[key]["first_name"]:
+            by_user[key]["first_name"] = c["first_name"]
+            by_user[key]["last_name"] = c["last_name"]
+            by_user[key]["user_id"] = c["user_id"]
         if not c.get("user_exists", True):
-            by_user[dn]["user_exists"] = False
+            by_user[key]["user_exists"] = False
     return by_user
 
 
@@ -460,14 +495,14 @@ def build_html_report(changes: list, missing_groups: list[str], dry_run: bool) -
     by_user = _group_changes_by_user(changes)
 
     users = []
-    for dn in sorted(by_user):
-        info = by_user[dn]
+    for key in sorted(by_user):
+        info = by_user[key]
         users.append({
             "name": f"{info['first_name']} {info['last_name']}".strip(),
             "user_id": info["user_id"],
             "added": sorted(info["added"]),
             "removed": sorted(info["removed"]),
-            "dn": dn,
+            "dn": info["dn"],
         })
 
     missing_users = sorted(

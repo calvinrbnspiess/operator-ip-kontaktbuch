@@ -19,7 +19,7 @@
 # Departments and functions reuse existing DB rows (Landau-Stadt id=10,
 # Atemschutzgeräteträger/in id=3) to avoid needing knowledge of the full
 # departments/functions table schema.  Test isolation is achieved by using
-# person_type_ids=99 persons that only exist during test runs.
+# persontypes 98/99 that only exist during test runs.
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 IFS=$'\n\t'
@@ -73,8 +73,10 @@ P_ALICE=8011
 P_BOB=8012
 P_CAROL=8013
 P_DAVE=8014    # inactive person
-P_EVE=8015     # wrong person type (type=2, excluded by test config filter)
+P_EVE=8015     # wrong person type
 P_FRANK=8016   # used for future-date membership tests
+P_GRACE=8017   # second persontype — verifies prefix is read dynamically from persontypes.short
+P_HEIDI=389    # short number — verifies zero-padding to 4 digits → expected CN "TI-0389"
 
 # DB row IDs for the test persons (high range, no production overlap)
 DB_ID_ALICE=9801
@@ -83,10 +85,16 @@ DB_ID_CAROL=9803
 DB_ID_DAVE=9804
 DB_ID_EVE=9805
 DB_ID_FRANK=9806
+DB_ID_GRACE=9807
+DB_ID_HEIDI=9808
 
-# Person type used exclusively for test persons.
-# Type 99 does not exist in production — used to distinguish test fixture rows.
+# Person types used exclusively by tests.  IDs 98/99 do not exist in
+# production; the distinct 'short' values let assertions verify the CN prefix
+# comes from persontypes.short (not a hardcoded "P-").
 TEST_PERSON_TYPE=99
+TEST_PERSON_TYPE_SHORT="TI"
+TEST_PERSON_TYPE_ALT=98
+TEST_PERSON_TYPE_ALT_SHORT="TK"
 
 # Reuse existing departments/functions — avoids needing to know their full
 # table schema.  Test isolation relies on test persons having type 99 and
@@ -312,15 +320,17 @@ delete_test_db_memberships() {
   db_exec "
     DELETE FROM public.persondepartments
     WHERE \"personId\" IN (
-      ${DB_ID_ALICE}, ${DB_ID_BOB}, ${DB_ID_CAROL},
-      ${DB_ID_DAVE},  ${DB_ID_EVE}, ${DB_ID_FRANK}
+      ${DB_ID_ALICE}, ${DB_ID_BOB},   ${DB_ID_CAROL},
+      ${DB_ID_DAVE},  ${DB_ID_EVE},   ${DB_ID_FRANK},
+      ${DB_ID_GRACE}, ${DB_ID_HEIDI}
     );
   "
   db_exec "
     DELETE FROM public.personfunctions
     WHERE \"personId\" IN (
-      ${DB_ID_ALICE}, ${DB_ID_BOB}, ${DB_ID_CAROL},
-      ${DB_ID_DAVE},  ${DB_ID_EVE}, ${DB_ID_FRANK}
+      ${DB_ID_ALICE}, ${DB_ID_BOB},   ${DB_ID_CAROL},
+      ${DB_ID_DAVE},  ${DB_ID_EVE},   ${DB_ID_FRANK},
+      ${DB_ID_GRACE}, ${DB_ID_HEIDI}
     );
   "
 }
@@ -332,36 +342,44 @@ delete_test_db_memberships() {
 global_setup() {
   echo "Setting up baseline test fixtures in the database …"
 
-  # Insert a test-only person type (99 = TestIsoliert).
-  # The test sync config filters for person_type_ids=[99], which means
-  # production persons (type 1) and seed.sh persons (type 5) are completely
-  # invisible to sync.sh during test runs.
+  # Insert two test-only person types.  The distinct 'short' values let
+  # assertions prove that the CN prefix is read from persontypes.short
+  # rather than hardcoded.  IDs 98/99 do not exist in production.
+  # Using ON CONFLICT DO UPDATE so the short is refreshed even if an older
+  # test run left a stale row (e.g. old 'TI99' short) behind.
   db_exec "
     INSERT INTO public.persontypes (id, name, short)
-    VALUES (${TEST_PERSON_TYPE}, 'TestIsoliert', 'TI99')
-    ON CONFLICT (id) DO NOTHING;
+    VALUES (${TEST_PERSON_TYPE},     'TestIsoliert',  '${TEST_PERSON_TYPE_SHORT}'),
+           (${TEST_PERSON_TYPE_ALT}, 'TestIsoliertK', '${TEST_PERSON_TYPE_ALT_SHORT}')
+    ON CONFLICT (id) DO UPDATE
+      SET name  = EXCLUDED.name,
+          short = EXCLUDED.short;
   "
 
-  # Insert test persons.  All get type 99 except Eve (type 2) who is used
-  # to test that the person_type_ids filter correctly excludes her.
+  # Insert test persons.  Most share TEST_PERSON_TYPE so their CN prefix is
+  # '${TEST_PERSON_TYPE_SHORT}-'.  Grace uses TEST_PERSON_TYPE_ALT ('${TEST_PERSON_TYPE_ALT_SHORT}-').
+  # Heidi has personNumber 389 to exercise zero-padding to 4 digits.
   # Dave is active=false to test that inactive persons are not synced.
+  # Eve has a production persontype (2) to test that alternate shorts work too.
   db_exec "
     INSERT INTO public.people
       (id, \"persontypeId\", sex, \"lastName\", \"firstName\",
        \"personNumber\", active, \"exportFlag\")
     VALUES
-      (${DB_ID_ALICE}, ${TEST_PERSON_TYPE}, 2, 'Testerin', 'Alice', ${P_ALICE}, true,  false),
-      (${DB_ID_BOB},   ${TEST_PERSON_TYPE}, 1, 'Tester',   'Bob',   ${P_BOB},   true,  false),
-      (${DB_ID_CAROL}, ${TEST_PERSON_TYPE}, 2, 'Tester',   'Carol', ${P_CAROL}, true,  false),
-      (${DB_ID_DAVE},  ${TEST_PERSON_TYPE}, 1, 'Tester',   'Dave',  ${P_DAVE},  false, false),
-      (${DB_ID_EVE},   2,                  2, 'Tester',   'Eve',   ${P_EVE},   true,  false),
-      (${DB_ID_FRANK}, ${TEST_PERSON_TYPE}, 1, 'Tester',   'Frank', ${P_FRANK}, true,  false)
+      (${DB_ID_ALICE}, ${TEST_PERSON_TYPE},     2, 'Testerin', 'Alice', ${P_ALICE}, true,  false),
+      (${DB_ID_BOB},   ${TEST_PERSON_TYPE},     1, 'Tester',   'Bob',   ${P_BOB},   true,  false),
+      (${DB_ID_CAROL}, ${TEST_PERSON_TYPE},     2, 'Tester',   'Carol', ${P_CAROL}, true,  false),
+      (${DB_ID_DAVE},  ${TEST_PERSON_TYPE},     1, 'Tester',   'Dave',  ${P_DAVE},  false, false),
+      (${DB_ID_EVE},   2,                      2, 'Tester',   'Eve',   ${P_EVE},   true,  false),
+      (${DB_ID_FRANK}, ${TEST_PERSON_TYPE},     1, 'Tester',   'Frank', ${P_FRANK}, true,  false),
+      (${DB_ID_GRACE}, ${TEST_PERSON_TYPE_ALT}, 2, 'Tester',   'Grace', ${P_GRACE}, true,  false),
+      (${DB_ID_HEIDI}, ${TEST_PERSON_TYPE},     2, 'Tester',   'Heidi', ${P_HEIDI}, true,  false)
     ON CONFLICT (id) DO NOTHING;
   "
   # No INSERT into departments or functions — we reuse existing rows
   # (TEST_DEPT_ID=${TEST_DEPT_ID} and TEST_FUNC_ID=${TEST_FUNC_ID}) to avoid
   # needing to know their full table schema.
-  echo "  → 6 test persons (type ${TEST_PERSON_TYPE}) inserted; reusing existing dept/func rows"
+  echo "  → 8 test persons inserted (types ${TEST_PERSON_TYPE}='${TEST_PERSON_TYPE_SHORT}', ${TEST_PERSON_TYPE_ALT}='${TEST_PERSON_TYPE_ALT_SHORT}'); reusing existing dept/func rows"
 }
 
 # ── Global teardown — runs once after all tests ───────────────────────────
@@ -425,7 +443,7 @@ objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
 member: cn=old-user,${LDAP_USERS_OU}
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -434,7 +452,7 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
 
   # Assert: old-user removed, Alice stays
   assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=old-user,${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T02"
 }
@@ -458,7 +476,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -466,8 +484,8 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: both Alice and Bob are now members
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_BOB},${LDAP_USERS_OU}"
 
   report_result "T03"
 }
@@ -494,8 +512,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: cn=P-${P_CAROL},${LDAP_USERS_OU}
-member: cn=P-${P_BOB},${LDAP_USERS_OU}"
+member: cn=TI-${P_CAROL},${LDAP_USERS_OU}
+member: cn=TI-${P_BOB},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -503,8 +521,8 @@ member: cn=P-${P_BOB},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Carol out (expired), Bob stays
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_BOB},${LDAP_USERS_OU}"
 
   report_result "T04"
 }
@@ -531,7 +549,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -539,8 +557,8 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice is in the group, Frank is not
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_FRANK},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_FRANK},${LDAP_USERS_OU}"
 
   report_result "T05"
 }
@@ -567,8 +585,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: cn=P-${P_CAROL},${LDAP_USERS_OU}
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_CAROL},${LDAP_USERS_OU}
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_FUNC}:function:${TEST_FUNC_NAME}:Test func group"
 
@@ -576,8 +594,8 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Carol removed (expired cert), Alice stays
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "cn=TI-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T06"
 }
@@ -604,7 +622,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_FUNC}:function:${TEST_FUNC_NAME}:Test func group"
 
@@ -612,8 +630,8 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice stays, Frank not added
-  assert_ldap_group_has_member             "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member           "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_FRANK},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member             "${TEST_LDAP_GROUP_FUNC}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member           "${TEST_LDAP_GROUP_FUNC}" "cn=TI-${P_FRANK},${LDAP_USERS_OU}"
 
   report_result "T07"
 }
@@ -644,13 +662,13 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
   ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   # Config maps both groups — sync processes each independently
   write_test_config \
@@ -661,8 +679,8 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice is a member of both LDAP groups
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_FUNC}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   report_result "T08"
 }
@@ -688,8 +706,8 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}
-member: cn=P-${P_BOB},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}
+member: cn=TI-${P_BOB},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -697,9 +715,9 @@ member: cn=P-${P_BOB},${LDAP_USERS_OU}"
   run_sync
 
   # Assert
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T09"
 }
@@ -744,7 +762,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
 
@@ -753,9 +771,9 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice is in the group; Bob and Carol are NOT (no phantom additions)
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T11"
 }
@@ -765,10 +783,16 @@ test_T12_user_with_multiple_roles_removed_from_one_group() {
   _assertion_failures=()
 
   # Arrange:
-  #   Alice is in both the department AND has the function.
-  #   LDAP has her in both groups.
-  #   Now her function cert expires — she should be removed from the func group
-  #   but remain in the dept group.
+  #   Alice is in the department (active) but her function cert expired yesterday.
+  #   Bob has an active function cert.
+  #   Both groups are pre-created in LDAP with Alice as member.
+  #   After sync: Alice stays in the dept group, is removed from the func group.
+  #   Bob is added to the func group (valid cert).
+  #
+  #   Note: groupOfNames requires at least one member attribute, so the func
+  #   group must have a remaining desired member (Bob) when Alice is removed.
+  #   A test with all desired members removed would violate the objectClass
+  #   constraint and is a separate operational concern, not this test's focus.
   delete_test_db_memberships
   delete_test_ldap_groups
   db_exec "
@@ -781,21 +805,23 @@ test_T12_user_with_multiple_roles_removed_from_one_group() {
     INSERT INTO public.personfunctions
       (\"personId\", \"funcId\", \"validFrom\", \"validUntil\")
     VALUES
-      -- Function cert expired yesterday
-      (${DB_ID_ALICE}, ${TEST_FUNC_ID}, '2020-01-01', (NOW() - INTERVAL '1 day')::date);
+      -- Alice's cert expired yesterday — she should be removed from the func group
+      (${DB_ID_ALICE}, ${TEST_FUNC_ID}, '2020-01-01', (NOW() - INTERVAL '1 day')::date),
+      -- Bob has a valid cert — he should be added to the func group
+      (${DB_ID_BOB},   ${TEST_FUNC_ID}, '2022-01-01', NULL);
   "
   ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_DEPT},${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_DEPT}
 description: Test dept group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
   ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_FUNC},${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_FUNC}
 description: Test func group
-member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
+member: cn=TI-${P_ALICE},${LDAP_USERS_OU}"
 
   write_test_config \
     "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group" \
@@ -804,9 +830,10 @@ member: cn=P-${P_ALICE},${LDAP_USERS_OU}"
   # Act
   run_sync
 
-  # Assert: Alice stays in dept group, is removed from func group
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  # Assert: Alice stays in dept group, is removed from func group; Bob is in func group
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_FUNC}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_FUNC}" "cn=TI-${P_BOB},${LDAP_USERS_OU}"
 
   report_result "T12"
 }
@@ -840,7 +867,7 @@ objectClass: top
 objectClass: groupOfNames
 cn: ${TEST_LDAP_GROUP_UNION}
 description: Multi-source test group
-member: cn=P-${P_CAROL},${LDAP_USERS_OU}"
+member: cn=TI-${P_CAROL},${LDAP_USERS_OU}"
 
   write_test_config_multisource "${TEST_LDAP_GROUP_UNION}" \
     "department:${TEST_DEPT_NAME}" \
@@ -850,9 +877,9 @@ member: cn=P-${P_CAROL},${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice added (dept), Bob added (func), Carol removed (neither)
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_BOB},${LDAP_USERS_OU}"
-  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_CAROL},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=TI-${P_BOB},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_UNION}" "cn=TI-${P_CAROL},${LDAP_USERS_OU}"
 
   report_result "T13"
 }
@@ -894,17 +921,97 @@ member: cn=placeholder,${LDAP_USERS_OU}"
   run_sync
 
   # Assert: Alice exactly once, placeholder gone
-  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_UNION}" "cn=TI-${P_ALICE},${LDAP_USERS_OU}"
   assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_UNION}" "cn=placeholder,${LDAP_USERS_OU}"
 
   local alice_count
   alice_count=$(ldap_get_members "${TEST_LDAP_GROUP_UNION}" \
-    | grep -cxF "cn=P-${P_ALICE},${LDAP_USERS_OU}" || true)
+    | grep -cxF "cn=TI-${P_ALICE},${LDAP_USERS_OU}" || true)
   if [[ "${alice_count}" -ne 1 ]]; then
     _assertion_failures+=("Expected Alice to appear exactly once in ${TEST_LDAP_GROUP_UNION}, got ${alice_count}")
   fi
 
   report_result "T14"
+}
+
+
+test_T15_cn_prefix_follows_persontype_short() {
+  echo "T15: Persons of different persontypes share one group → each CN uses its own persontype short"
+  _assertion_failures=()
+
+  # Arrange:
+  #   Alice (persontype ${TEST_PERSON_TYPE}, short '${TEST_PERSON_TYPE_SHORT}') and
+  #   Grace (persontype ${TEST_PERSON_TYPE_ALT}, short '${TEST_PERSON_TYPE_ALT_SHORT}')
+  #   are both in the same department.  The resulting CNs must reflect their
+  #   respective shorts — proving the prefix is read from persontypes.short
+  #   instead of being hardcoded to "P-".
+  delete_test_db_memberships
+  delete_test_ldap_groups
+  db_exec "
+    INSERT INTO public.persondepartments
+      (\"personId\", \"departmentId\", \"memberFrom\", \"memberUntil\")
+    VALUES
+      (${DB_ID_ALICE}, ${TEST_DEPT_ID}, '2020-01-01', NULL),
+      (${DB_ID_GRACE}, ${TEST_DEPT_ID}, '2020-01-01', NULL);
+  "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_DEPT},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_DEPT}
+description: Test dept group
+member: cn=placeholder,${LDAP_USERS_OU}"
+
+  write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
+
+  # Act
+  run_sync
+
+  # Assert: each CN carries the short of its own persontype
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" \
+    "cn=${TEST_PERSON_TYPE_SHORT}-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_has_member "${TEST_LDAP_GROUP_DEPT}" \
+    "cn=${TEST_PERSON_TYPE_ALT_SHORT}-${P_GRACE},${LDAP_USERS_OU}"
+  # And the "P-" prefix must NOT be used for persons whose persontype short isn't "P"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" \
+    "cn=P-${P_ALICE},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" \
+    "cn=P-${P_GRACE},${LDAP_USERS_OU}"
+
+  report_result "T15"
+}
+
+test_T16_person_number_is_zero_padded_to_four_digits() {
+  echo "T16: Person number shorter than 4 digits → CN is zero-padded (389 → '0389')"
+  _assertion_failures=()
+
+  # Arrange: Heidi's personNumber is 389.  Expected CN: "${TEST_PERSON_TYPE_SHORT}-0389".
+  delete_test_db_memberships
+  delete_test_ldap_groups
+  db_exec "
+    INSERT INTO public.persondepartments
+      (\"personId\", \"departmentId\", \"memberFrom\", \"memberUntil\")
+    VALUES
+      (${DB_ID_HEIDI}, ${TEST_DEPT_ID}, '2020-01-01', NULL);
+  "
+  ldap_add_entry "dn: cn=${TEST_LDAP_GROUP_DEPT},${LDAP_GROUPS_OU}
+objectClass: top
+objectClass: groupOfNames
+cn: ${TEST_LDAP_GROUP_DEPT}
+description: Test dept group
+member: cn=placeholder,${LDAP_USERS_OU}"
+
+  write_test_config "${TEST_LDAP_GROUP_DEPT}:department:${TEST_DEPT_NAME}:Test dept group"
+
+  # Act
+  run_sync
+
+  # Assert: padded CN present, unpadded CN absent
+  assert_ldap_group_has_member   "${TEST_LDAP_GROUP_DEPT}" \
+    "cn=${TEST_PERSON_TYPE_SHORT}-0${P_HEIDI},${LDAP_USERS_OU}"
+  assert_ldap_group_lacks_member "${TEST_LDAP_GROUP_DEPT}" \
+    "cn=${TEST_PERSON_TYPE_SHORT}-${P_HEIDI},${LDAP_USERS_OU}"
+
+  report_result "T16"
 }
 
 
@@ -937,6 +1044,8 @@ main() {
   test_T12_user_with_multiple_roles_removed_from_one_group
   test_T13_multi_source_group_unions_members
   test_T14_multi_source_dedupes_person_in_both
+  test_T15_cn_prefix_follows_persontype_short
+  test_T16_person_number_is_zero_padded_to_four_digits
 
   global_teardown
 

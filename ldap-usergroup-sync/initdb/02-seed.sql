@@ -1,8 +1,10 @@
--- Person types
+-- Person types (mirror production: name, short pairs used as LDAP CN prefix).
 INSERT INTO public.persontypes (id, name, short) VALUES
-    (1, 'Aktiv',       'AKT'),
-    (2, 'Passiv',      'PAS'),
-    (5, 'Testperson',  'TEST');
+    (1, 'eigenes Personal',            'P'),
+    (2, 'Mitarbeiter Stadtverwaltung', 'SV'),
+    (3, 'KatS-Stab',                   'K'),
+    (4, 'externe Kräfte',              'E'),
+    (5, 'Testperson',                  'TEST');
 SELECT setval('persontypes_id_seq', 100);
 
 -- Departments (IDs must match seed.sh references)

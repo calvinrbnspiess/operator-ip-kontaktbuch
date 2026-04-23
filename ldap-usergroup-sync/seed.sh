@@ -82,6 +82,13 @@ ldap_add() {
     -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" 2>&1 || true
 }
 
+ldap_delete() {
+  ldapdelete -x \
+    -H "ldap://${LDAP_HOST}:${LDAP_PORT}" \
+    -D "${LDAP_BIND_DN}" -w "${LDAP_BIND_PW}" \
+    "$1" > /dev/null 2>&1 || true
+}
+
 echo "════════════════════════════════════════════════"
 echo "ldap-usergroup-sync — seeding demo data"
 echo "════════════════════════════════════════════════"
@@ -92,19 +99,32 @@ echo "════════════════════════�
 echo ""
 echo "── PostgreSQL: inserting test persons ──"
 
+# Reset memberships for the demo persons so this script is re-runnable.
+db "
+DELETE FROM public.persondepartments WHERE \"personId\" BETWEEN 9001 AND 9005;
+DELETE FROM public.personfunctions  WHERE \"personId\" BETWEEN 9001 AND 9005;
+"
+
+# Persons — mix of persontypes to exercise every CN prefix case.
+# Thomas (personNumber 34) and Peter (123) show zero-padding to 4 digits.
 db "
 INSERT INTO public.people
   (id, \"persontypeId\", sex, \"lastName\", \"firstName\",
    \"personNumber\", active, \"exportFlag\")
 VALUES
-  (9001, 5, 1, 'Mustermann', 'Max',    1001, true, false),
-  (9002, 5, 2, 'Musterfrau', 'Maria',  1002, true, false),
-  (9003, 5, 1, 'Testmann',   'Thomas', 1003, true, false),
-  (9004, 5, 1, 'Prüfer',     'Peter',  1004, true, false),
-  (9005, 5, 2, 'Überin',     'Ursula', 1005, true, false)
-ON CONFLICT (id) DO NOTHING;
+  (9001, 1, 1, 'Mustermann', 'Max',      1001, true, false),
+  (9002, 1, 2, 'Musterfrau', 'Maria',    1002, true, false),
+  (9003, 5, 1, 'Testmann',   'Thomas',     34, true, false),
+  (9004, 3, 1, 'Prüfer',     'Peter',     123, true, false),
+  (9005, 4, 2, 'Überin',     'Ursula',   4012, true, false)
+ON CONFLICT (id) DO UPDATE
+  SET \"persontypeId\" = EXCLUDED.\"persontypeId\",
+      \"personNumber\" = EXCLUDED.\"personNumber\",
+      \"firstName\"    = EXCLUDED.\"firstName\",
+      \"lastName\"     = EXCLUDED.\"lastName\",
+      active          = EXCLUDED.active;
 "
-echo "  → 5 test persons inserted (ids 9001–9005, personNumbers 1001–1005)"
+echo "  → 5 persons inserted: P-1001, P-1002, TEST-0034, K-0123, E-4012"
 
 # ───────────────────────────────────────────────────────────────────────────
 # 2. PostgreSQL — department memberships
@@ -228,119 +248,100 @@ userPassword: DemoPassword1!"
   fi
 }
 
-create_ldap_user "P-1001" "Max Mustermann"   "Mustermann" "Max"
-create_ldap_user "P-1002" "Maria Musterfrau" "Musterfrau" "Maria"
-create_ldap_user "P-1003" "Thomas Testmann"  "Testmann"   "Thomas"
-create_ldap_user "P-1004" "Peter Prüfer"     "Prüfer"     "Peter"
-create_ldap_user "P-1005" "Ursula Überin"    "Überin"     "Ursula"
+# Remove legacy CNs left over from earlier seed runs (old hardcoded P- prefix
+# for every person, or TEST-100x entries the sync created against stale data).
+for legacy in P-1003 P-1004 P-1005 TEST-1001 TEST-1002 TEST-1003 TEST-1004 TEST-1005; do
+  ldap_delete "cn=${legacy},${LDAP_USERS_OU}"
+done
+
+create_ldap_user "P-1001"    "Max Mustermann"   "Mustermann" "Max"
+create_ldap_user "P-1002"    "Maria Musterfrau" "Musterfrau" "Maria"
+create_ldap_user "TEST-0034" "Thomas Testmann"  "Testmann"   "Thomas"
+create_ldap_user "K-0123"    "Peter Prüfer"     "Prüfer"     "Peter"
+create_ldap_user "E-4012"    "Ursula Überin"    "Überin"     "Ursula"
 
 echo ""
-echo "── LDAP: creating groups with stale/wrong memberships ──"
+echo "── LDAP: recreating groups with intentionally stale memberships ──"
 
-# atemschutz — P-1004 was a member but cert expired, P-1005 never qualified
-# Desired: P-1001, P-1002.  So P-1004 and P-1005 get removed.
-GRP_DN="cn=atemschutz,${LDAP_GROUPS_OU}"
-if ! ldap_entry_exists "${GRP_DN}"; then
-  ldap_add "dn: ${GRP_DN}
+# Wipe demo groups so the script is re-runnable with a predictable starting state.
+for grp in atemschutz korbfahrer landau-stadt landau-dammheim wehrfuehrer gefahrstoffzug; do
+  ldap_delete "cn=${grp},${LDAP_GROUPS_OU}"
+done
+
+# atemschutz — has K-0123 (cert expired) and E-4012 (no function at all).
+# Desired: P-1001, P-1002.
+ldap_add "dn: cn=atemschutz,${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: atemschutz
 description: Aktive Atemschutzgeräteträger
-member: cn=P-1004,${LDAP_USERS_OU}
-member: cn=P-1005,${LDAP_USERS_OU}"
-  echo "  → Group 'atemschutz': created with P-1004 (expired) + P-1005 (wrong)"
-else
-  echo "  → Group 'atemschutz': already exists"
-fi
+member: cn=K-0123,${LDAP_USERS_OU}
+member: cn=E-4012,${LDAP_USERS_OU}"
+echo "  → 'atemschutz'      : K-0123 (expired cert) + E-4012 (wrong)"
 
-# korbfahrer — P-1003 wrongly assigned, should be replaced by P-1002
-GRP_DN="cn=korbfahrer,${LDAP_GROUPS_OU}"
-if ! ldap_entry_exists "${GRP_DN}"; then
-  ldap_add "dn: ${GRP_DN}
+# korbfahrer — has TEST-0034 (wrong function). Desired: P-1002.
+ldap_add "dn: cn=korbfahrer,${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: korbfahrer
 description: Korbfahrer
-member: cn=P-1003,${LDAP_USERS_OU}"
-  echo "  → Group 'korbfahrer': created with P-1003 (wrong member)"
-else
-  echo "  → Group 'korbfahrer': already exists"
-fi
+member: cn=TEST-0034,${LDAP_USERS_OU}"
+echo "  → 'korbfahrer'      : TEST-0034 (wrong)"
 
-# landau-stadt — P-1001 already correct, P-1005 expired, P-1003 wrong dept
-# Desired: P-1001, P-1002.  So P-1005 and P-1003 removed, P-1002 added.
-GRP_DN="cn=landau-stadt,${LDAP_GROUPS_OU}"
-if ! ldap_entry_exists "${GRP_DN}"; then
-  ldap_add "dn: ${GRP_DN}
+# landau-stadt — P-1001 correct, E-4012 expired, TEST-0034 wrong dept.
+# Desired: P-1001, P-1002.
+ldap_add "dn: cn=landau-stadt,${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: landau-stadt
 description: Angehörige der Einheit Landau-Stadt
 member: cn=P-1001,${LDAP_USERS_OU}
-member: cn=P-1005,${LDAP_USERS_OU}
-member: cn=P-1003,${LDAP_USERS_OU}"
-  echo "  → Group 'landau-stadt': created with P-1001 (correct), P-1005 (expired), P-1003 (wrong)"
-else
-  echo "  → Group 'landau-stadt': already exists"
-fi
+member: cn=E-4012,${LDAP_USERS_OU}
+member: cn=TEST-0034,${LDAP_USERS_OU}"
+echo "  → 'landau-stadt'    : P-1001 (keep) + E-4012 (expired) + TEST-0034 (wrong)"
 
-# landau-dammheim — empty (placeholder), P-1003 should be added
-GRP_DN="cn=landau-dammheim,${LDAP_GROUPS_OU}"
-if ! ldap_entry_exists "${GRP_DN}"; then
-  ldap_add "dn: ${GRP_DN}
+# landau-dammheim — P-1001 wrong dept. Desired: TEST-0034.
+ldap_add "dn: cn=landau-dammheim,${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: landau-dammheim
 description: Angehörige der Einheit Landau-Dammheim
 member: cn=P-1001,${LDAP_USERS_OU}"
-  echo "  → Group 'landau-dammheim': created with P-1001 (wrong dept)"
-else
-  echo "  → Group 'landau-dammheim': already exists"
-fi
+echo "  → 'landau-dammheim' : P-1001 (wrong)"
 
-# wehrfuehrer — P-1001 wrongly in here, P-1003 should be added
-GRP_DN="cn=wehrfuehrer,${LDAP_GROUPS_OU}"
-if ! ldap_entry_exists "${GRP_DN}"; then
-  ldap_add "dn: ${GRP_DN}
+# wehrfuehrer — P-1001 wrong function. Desired: TEST-0034.
+ldap_add "dn: cn=wehrfuehrer,${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: wehrfuehrer
 description: Wehrführer
 member: cn=P-1001,${LDAP_USERS_OU}"
-  echo "  → Group 'wehrfuehrer': created with P-1001 (wrong member)"
-else
-  echo "  → Group 'wehrfuehrer': already exists"
-fi
+echo "  → 'wehrfuehrer'     : P-1001 (wrong)"
 
-# gefahrstoffzug — P-1002 wrongly assigned, P-1004 should be added
-GRP_DN="cn=gefahrstoffzug,${LDAP_GROUPS_OU}"
-if ! ldap_entry_exists "${GRP_DN}"; then
-  ldap_add "dn: ${GRP_DN}
+# gefahrstoffzug — P-1002 wrong function. Desired: K-0123.
+ldap_add "dn: cn=gefahrstoffzug,${LDAP_GROUPS_OU}
 objectClass: top
 objectClass: groupOfNames
 cn: gefahrstoffzug
 description: Angehörige des Gefahrstoffzuges
 member: cn=P-1002,${LDAP_USERS_OU}"
-  echo "  → Group 'gefahrstoffzug': created with P-1002 (wrong member)"
-else
-  echo "  → Group 'gefahrstoffzug': already exists"
-fi
+echo "  → 'gefahrstoffzug'  : P-1002 (wrong)"
 
 echo ""
 echo "════════════════════════════════════════════════"
 echo "Seeding complete."
 echo ""
 echo "Expected sync.py behaviour:"
-echo "  Group 'atemschutz'     : +P-1001, +P-1002  (remove P-1004 expired, P-1005 wrong)"
-echo "  Group 'korbfahrer'     : +P-1002            (remove P-1003 wrong)"
-echo "  Group 'landau-stadt'   : +P-1002            (keep P-1001, remove P-1005 expired + P-1003 wrong)"
-echo "  Group 'landau-dammheim': +P-1003            (remove P-1001 wrong dept)"
-echo "  Group 'wehrfuehrer'    : +P-1003            (remove P-1001 wrong)"
-echo "  Group 'gefahrstoffzug' : +P-1004            (remove P-1002 wrong)"
+echo "  'atemschutz'     : +P-1001, +P-1002   −K-0123 (expired) −E-4012 (wrong)"
+echo "  'korbfahrer'     : +P-1002             −TEST-0034 (wrong)"
+echo "  'landau-stadt'   : +P-1002  (keep P-1001)  −E-4012 (expired) −TEST-0034 (wrong)"
+echo "  'landau-dammheim': +TEST-0034          −P-1001 (wrong)"
+echo "  'wehrfuehrer'    : +TEST-0034          −P-1001 (wrong)"
+echo "  'gefahrstoffzug' : +K-0123             −P-1002 (wrong)"
 echo ""
-echo "  P-1001: +atemschutz, +landau-stadt(kept)    −landau-dammheim, −wehrfuehrer"
-echo "  P-1002: +atemschutz, +korbfahrer, +landau-stadt  −gefahrstoffzug"
-echo "  P-1003: +landau-dammheim, +wehrfuehrer      −korbfahrer, −landau-stadt"
-echo "  P-1004: +gefahrstoffzug                     −atemschutz"
-echo "  P-1005:                                     −atemschutz, −landau-stadt"
+echo "  P-1001   : +atemschutz, +landau-stadt(kept)   −landau-dammheim, −wehrfuehrer"
+echo "  P-1002   : +atemschutz, +korbfahrer, +landau-stadt  −gefahrstoffzug"
+echo "  TEST-0034: +landau-dammheim, +wehrfuehrer    −korbfahrer, −landau-stadt"
+echo "  K-0123   : +gefahrstoffzug                   −atemschutz"
+echo "  E-4012   :                                   −atemschutz, −landau-stadt"
 echo "════════════════════════════════════════════════"
